@@ -307,11 +307,23 @@ class TestMockProviderE2E(unittest.TestCase):
             "forward_eps_consensus": 3.5,
             "eps_ttm": 3.0,
         }
+        mock_rev = {
+            "status": "ok",
+            "source": "mock",
+            "data_month": "11508",
+            "revenue_curr_month_k": 200000,
+            "yoy_pct": 12.5,
+            "mom_pct": 3.0,
+            "cum_yoy_pct": 10.0,
+            "yoy_history": [],
+            "accel_flag": None,
+            "turned_negative": None,
+        }
         data = gather_taiwan_stock_data(
             "3141",
             force=True,
             config=self.mock_cfg,
-            mock_overrides={"valuation": mock_val},
+            mock_overrides={"valuation": mock_val, "monthly_revenue": mock_rev},
         )
         self.assertEqual(data["code"], "3141")
         self.assertEqual(data["market"], "tpex")
@@ -338,11 +350,23 @@ class TestMockProviderE2E(unittest.TestCase):
             "forward_eps_consensus": None,
             "eps_ttm": 0.43,
         }
+        mock_rev = {
+            "status": "ok",
+            "source": "mock",
+            "data_month": "11508",
+            "revenue_curr_month_k": 100000,
+            "yoy_pct": -15.0,
+            "mom_pct": -2.0,
+            "cum_yoy_pct": -8.0,
+            "yoy_history": [],
+            "accel_flag": None,
+            "turned_negative": True,
+        }
         data = gather_taiwan_stock_data(
             "2328",
             force=True,
             config=self.mock_cfg,
-            mock_overrides={"valuation": mock_val},
+            mock_overrides={"valuation": mock_val, "monthly_revenue": mock_rev},
         )
         self.assertEqual(data["code"], "2328")
         self.assertEqual(data["market"], "twse")

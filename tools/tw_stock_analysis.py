@@ -27,7 +27,6 @@ import logging
 import math
 import os
 import re
-import ssl
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -119,10 +118,17 @@ def get_company_name(code: str, default_name: str = "") -> str:
 
 # ── 月營收資料提取 ────────────────────────────────────────────────────────────
 
-def get_monthly_revenue_data(code: str, market: str) -> dict[str, Any]:
+def get_monthly_revenue_data(
+    code: str,
+    market: str,
+    mock_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     從 leading-indicators.json 或 TWSE/TPEx OpenAPI 取得該標的最新月營收資料
     """
+    if mock_override is not None:
+        return mock_override
+
     # 1. 嘗試從 leading-indicators.json 讀取
     if LEADING_CACHE_FILE.exists():
         try:
@@ -152,7 +158,7 @@ def get_monthly_revenue_data(code: str, market: str) -> dict[str, Any]:
         import requests
         if market == "tpex":
             url = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-            r = requests.get(url, verify=False, timeout=6)
+            r = requests.get(url, timeout=6)
             if r.status_code == 200:
                 rows = r.json()
                 for row in rows:
@@ -277,7 +283,7 @@ def fetch_tw_valuation_inputs(
         try:
             import requests
             url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
-            r = requests.get(url, verify=False, timeout=6)
+            r = requests.get(url, timeout=6)
             if r.status_code == 200:
                 rows = r.json()
                 for row in rows:
@@ -574,7 +580,8 @@ def gather_taiwan_stock_data(
             cat_ticker_data = {"events": [], "next_event": None, "status": "(unavailable)", "error": str(e)}
 
     # 4. 月營收 (Monthly Revenue)
-    monthly_rev = get_monthly_revenue_data(code, market)
+    monthly_rev_mock = mock_overrides.get("monthly_revenue") if mock_overrides else None
+    monthly_rev = get_monthly_revenue_data(code, market, mock_override=monthly_rev_mock)
 
     # 5. 估值三錨點 (Valuation Anchors)
     price_prov = None

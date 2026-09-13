@@ -381,10 +381,20 @@ def md_to_html(md_text: str) -> tuple[str, str]:
     elif _MARKDOWN_BACKEND == "markdown-it":
         md = markdown_it.MarkdownIt("commonmark", {"breaks": True, "html": True}).enable("table")
         body = md.render(md_text)
-        # Extract simple TOC from h2 and h3
+
+        def _slug(text: str) -> str:
+            return re.sub(r"[^a-zA-Z0-9_-]", "-", text.lower())
+
+        # Extract simple TOC from h2 and h3, then give matching tags real ids
         headers = re.findall(r'<h([23])>([^<]+)</h\1>', body)
-        toc_items = [f'<li><a href="#{re.sub(r"[^a-zA-Z0-9_-]", "-", h[1].lower())}">{h[1]}</a></li>' for h in headers]
+        toc_items = [f'<li><a href="#{_slug(h[1])}">{h[1]}</a></li>' for h in headers]
         toc = f"<ul>{''.join(toc_items)}</ul>" if toc_items else ""
+
+        def _add_id(m: re.Match) -> str:
+            level, text = m.group(1), m.group(2)
+            return f'<h{level} id="{_slug(text)}">{text}</h{level}>'
+
+        body = re.sub(r'<h([23])>([^<]+)</h\1>', _add_id, body)
         return toc, body
     else:
         # Minimal plain html fallback
