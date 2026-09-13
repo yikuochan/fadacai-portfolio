@@ -124,7 +124,7 @@ class TestValuationDegradation(unittest.TestCase):
         res = compute_taiwan_three_anchors(val_inputs)
         self.assertEqual(res["num_available_anchors"], 2)
         self.assertEqual(res["base_fair_pe"], 25.0)
-        self.assertEqual(res["a2_desc"], "(A2 unavailable)")
+        self.assertIn("(A2 unavailable", res["a2_desc"])
         self.assertTrue(res["is_confident"])
         self.assertIsNone(res["confidence_warning"])
 
@@ -143,8 +143,8 @@ class TestValuationDegradation(unittest.TestCase):
         self.assertFalse(res["is_confident"])
         self.assertIsNotNone(res["confidence_warning"])
         self.assertIn("僅 1 個錨點可用", res["confidence_warning"])
-        self.assertEqual(res["a2_desc"], "(A2 unavailable)")
-        self.assertEqual(res["a3_desc"], "(A3 unavailable)")
+        self.assertIn("(A2 unavailable", res["a2_desc"])
+        self.assertIn("(A3 unavailable", res["a3_desc"])
 
     def test_zero_anchors_degradation(self):
         # 全無錨點
@@ -161,6 +161,114 @@ class TestValuationDegradation(unittest.TestCase):
         self.assertFalse(res["is_confident"])
         self.assertIn("無可用錨點", res["confidence_warning"])
         self.assertIsNone(res["fair_price_base"])
+
+
+class TestAnchorExplanationAndUnavailableReasons(unittest.TestCase):
+    """測試錨點說明文字與缺位具體原因展示 (全可用、部分缺席、僅 1 個可用)"""
+
+    def test_all_three_anchors_available_report(self):
+        # 1. 錨點全可用情境
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 25.0,
+            "forward_eps_growth": 20.0,
+            "target_price_analyst": 150.0,
+            "forward_eps_consensus": 5.0,
+            "eps_ttm": 4.0,
+        }
+        val_res = compute_taiwan_three_anchors(val_inputs)
+        ev_res = compute_first_principles_ev(val_res)
+        mock_data = {
+            "code": "2330",
+            "name": "台積電",
+            "full_symbol": "2330.TW",
+            "valuation": val_res,
+            "monthly_revenue": {"status": "ok", "data_month": "11508", "yoy_pct": 30.0, "revenue_curr_month_k": 200000000},
+            "chips": {},
+            "technicals": {},
+            "catalyst": {},
+            "ev": ev_res,
+        }
+        report = format_taiwan_stock_report(mock_data)
+        # 驗證錨點說明文字
+        self.assertIn("【錨點說明】", report)
+        self.assertIn("A1 市場隱含 PE**：現價 ÷ 過去十二個月每股盈餘（TTM EPS）", report)
+        self.assertIn("A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數", report)
+        self.assertIn("A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS", report)
+        self.assertIn("計算規則**：Base = 可用錨點 median；Bull = max × 1.25；Bear = min × 0.70", report)
+        self.assertIn("註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。", report)
+        # 三個錨點皆數值正常，無 unavailable
+        self.assertIn("A1 市場 PE**：25.0", report)
+        self.assertIn("A2 PEG 成長錨**：20.0", report)
+        self.assertIn("A3 分析師目標價隱含 PE**：30.0", report)
+        self.assertNotIn("A1 unavailable", report)
+        self.assertNotIn("A2 unavailable", report)
+        self.assertNotIn("A3 unavailable", report)
+        self.assertNotIn("⚠️ 估值信心不足", report)
+
+    def test_two_anchors_available_partial_unavailable_reason(self):
+        # 2. 部分缺席情境 (2 個可用，A2 缺席附具體原因)
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 20.0,
+            "forward_eps_growth": None,
+            "target_price_analyst": 120.0,
+            "forward_eps_consensus": 5.0,
+            "eps_ttm": 5.0,
+            "a2_unavailable_reason": "無公開分析師一致預期覆蓋",
+        }
+        val_res = compute_taiwan_three_anchors(val_inputs)
+        ev_res = compute_first_principles_ev(val_res)
+        mock_data = {
+            "code": "2328",
+            "name": "廣宇",
+            "full_symbol": "2328.TW",
+            "valuation": val_res,
+            "monthly_revenue": {"status": "ok"},
+            "chips": {},
+            "technicals": {},
+            "catalyst": {},
+            "ev": ev_res,
+        }
+        report = format_taiwan_stock_report(mock_data)
+        self.assertIn("【錨點說明】", report)
+        self.assertIn("A1 市場 PE**：20.0", report)
+        self.assertIn("A2 PEG 成長錨**：(A2 unavailable: 無公開分析師一致預期覆蓋)", report)
+        self.assertIn("A3 分析師目標價隱含 PE**：24.0", report)
+        self.assertNotIn("⚠️ 估值信心不足", report)
+
+    def test_single_anchor_available_with_distinct_reasons(self):
+        # 3. 僅 1 個可用情境 (A2、A3 缺席附各自具體原因，且觸發估值信心不足)
+        val_inputs = {
+            "current_price": 90.8,
+            "trailing_pe": 29.8,
+            "forward_eps_growth": None,
+            "target_price_analyst": None,
+            "forward_eps_consensus": None,
+            "eps_ttm": 3.05,
+            "a2_unavailable_reason": "缺乏未來 Forward EPS 成長率數據",
+            "a3_unavailable_reason": "無可查證之券商目標價來源",
+        }
+        val_res = compute_taiwan_three_anchors(val_inputs)
+        ev_res = compute_first_principles_ev(val_res)
+        mock_data = {
+            "code": "3141",
+            "name": "晶宏",
+            "full_symbol": "3141.TWO",
+            "valuation": val_res,
+            "monthly_revenue": {"status": "ok"},
+            "chips": {},
+            "technicals": {},
+            "catalyst": {},
+            "ev": ev_res,
+        }
+        report = format_taiwan_stock_report(mock_data)
+        self.assertIn("【錨點說明】", report)
+        self.assertIn("A1 市場 PE**：29.8", report)
+        self.assertIn("A2 PEG 成長錨**：(A2 unavailable: 缺乏未來 Forward EPS 成長率數據)", report)
+        self.assertIn("A3 分析師目標價隱含 PE**：(A3 unavailable: 無可查證之券商目標價來源)", report)
+        self.assertIn("⚠️ 估值信心不足：僅 1 個錨點可用", report)
+        self.assertIn("建議：Hold (Data Insufficient)", report)
 
 
 class TestDisplayOnlyDiscipline(unittest.TestCase):
@@ -378,8 +486,8 @@ class TestMockProviderE2E(unittest.TestCase):
         report = format_taiwan_stock_report(data)
         self.assertIn("股票研究報告：廣宇（2328.TW）", report)
         self.assertIn("⚠️ 估值信心不足：僅 1 個錨點可用", report)
-        self.assertIn("(A2 unavailable)", report)
-        self.assertIn("(A3 unavailable)", report)
+        self.assertIn("(A2 unavailable:", report)
+        self.assertIn("(A3 unavailable:", report)
 
     def test_provider_partial_unavailable_degrades_cleanly(self):
         # 當某區塊 provider 回傳失敗時，標記 (unavailable) 不使整份報告 crash
