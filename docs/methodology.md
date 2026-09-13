@@ -3,7 +3,12 @@
 這套框架的核心不是「叫 LLM 給意見」，而是用多層紀律強迫每個結論落在可驗證的 ground truth 上。以下逐項展開 [README「核心設計」](../README.md#核心設計) 列出的機制。
 
 - **第一性原理紀律（Step 0e）** — 任何 Verdict 前強制回答三題：① 核心 thesis（1 句**可驗證命題**，非 narrative）② 證偽條件（2-3 個 falsifiable 觀察點）③ 機率分布 + EV（由 `probability-honesty-checker` agent 強制計算，禁用 default bell shape 與「略偏正」這類質性語言）。
-- **三錨點 Fair PE 估值（Section 8.5 / G3.5）** — 不手寫 PE 倍數猜想；用三個獨立錨點做三角定位：A1 市場隱含 PE（EODHD）/ A2 PEG 成長合理倍數 / A3 分析師 PT 隱含 PE。Base = median；Bull = max × 1.25；Bear = min × 0.70。`pe_ratio == 0.0` / `peg_ratio == 0.0` → 自動丟棄該錨，標 `(anchor unavailable)`。
+- **三錨點 Fair PE 估值（Section 8.5 / G3.5 / 台股估值）** — 不手寫 PE 倍數猜想；用三個獨立錨點做三角定位：
+  - **A1 市場隱含 PE**：現價 ÷ 過去十二個月每股盈餘（TTM EPS），反映市場現在願意給的倍數（美股 EODHD / 台股 TWSE/TPEx OpenAPI）。
+  - **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期）。
+  - **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法。
+  - **計算規則**：Base = median；Bull = max × 1.25；Bear = min × 0.70。`pe_ratio == 0.0` / `peg_ratio == 0.0` 或缺值 → 自動丟棄該錨，標 `(anchor unavailable: 具體原因)`。可用錨點 < 2 則強制標示「⚠️ 估值信心不足」且不強行提供目標價。
+  - *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*
 - **Thesis Ledger（`tools/thesis_ledger.py`）** — 把帶觸發點的 thesis 登錄進帳本，到期（如財報日）自動回頭抓實際數字驗收 passed/failed，累積命中率。詳見 [`thesis-ledger.md`](thesis-ledger.md)。
 - **Thesis 驗證 → 股價影響（D2 三桶分解）** — thesis verdict 不只是分類；`resolve` 時帶結構化旗標：`fair_value_before/after`（三錨點重算）+ `price_impact_pct` + `impact_decomp`（thesis 成分 vs 倍數重估成分分解）。實例：AVBO partial → `thesis +6%(FY27 AI guide 確認)/multiple −16%(GM 壓縮 re-rate)=net −9.8%`。
 - **全持倉基本面快取（`briefing-out/cache/fundamentals-snapshot.json`）** — `fetch_fundamentals.py` 每交易日 launchd 預載，TTL 24h。Quick/Telegram tier 直接讀快取（zero-latency，不等 MCP）；Deep tier 強制刷新。

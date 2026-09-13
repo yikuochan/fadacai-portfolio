@@ -307,6 +307,10 @@ def fetch_tw_valuation_inputs(
     forward_eps_consensus = None
     eps_ttm = None
 
+    a1_unavailable_reason = None
+    a2_unavailable_reason = "台股無公開分析師一致預期覆蓋（缺乏未來 Forward EPS 成長率數據）"
+    a3_unavailable_reason = "無公開可查證之券商/法人一致預期目標價與預估 EPS"
+
     # 1. 取得現價
     if price_prov:
         try:
@@ -317,34 +321,55 @@ def fetch_tw_valuation_inputs(
             pass
 
     # 2. 從 TWSE / TPEx OpenAPI 抓取官方本益比 (A1)
+    a1_fetch_failed = False
+    a1_found_but_invalid = False
     if market == "tpex":
         try:
             url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
             rows = _http_get_json(url, timeout=15)
+            found_code = False
             if isinstance(rows, list):
                 for row in rows:
                     row_code = str(row.get("SecuritiesCompanyCode") or row.get("公司代號") or row.get("Code") or "").strip()
                     if row_code == code:
+                        found_code = True
                         pe_str = str(row.get("PriceEarningRatio", "")).replace(",", "").strip()
                         if pe_str and pe_str not in ("-", "--", "0.00", "0"):
                             trailing_pe = float(pe_str)
+                        else:
+                            a1_found_but_invalid = True
                         break
+            if not found_code and not a1_found_but_invalid:
+                a1_unavailable_reason = "TPEx 官方清單中無此標的本益比資料"
         except Exception as e:
             logger.warning("[%s] TPEx PE fetch failed: %s", code, e)
+            a1_fetch_failed = True
+            a1_unavailable_reason = f"TPEx OpenAPI 連線或擷取失敗（{e.__class__.__name__}）"
     else:
         try:
             url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
             rows = _http_get_json(url, timeout=15)
+            found_code = False
             if isinstance(rows, list):
                 for row in rows:
                     row_code = str(row.get("Code") or row.get("公司代號") or row.get("SecuritiesCompanyCode") or "").strip()
                     if row_code == code:
+                        found_code = True
                         pe_str = str(row.get("PEratio", "")).replace(",", "").strip()
                         if pe_str and pe_str not in ("-", "--", "0.00", "0"):
                             trailing_pe = float(pe_str)
+                        else:
+                            a1_found_but_invalid = True
                         break
+            if not found_code and not a1_found_but_invalid:
+                a1_unavailable_reason = "TWSE 官方清單中無此標的本益比資料"
         except Exception as e:
             logger.warning("[%s] TWSE PE fetch failed: %s", code, e)
+            a1_fetch_failed = True
+            a1_unavailable_reason = f"TWSE OpenAPI 連線或擷取失敗（{e.__class__.__name__}）"
+
+    if a1_found_but_invalid:
+        a1_unavailable_reason = "官方本益比為虧損或無數值（PE ≤ 0 或為空）"
 
     # 3. 嘗試 Yahoo Finance 補充現價或 PE
     if current_price is None or trailing_pe is None:
@@ -361,6 +386,9 @@ def fetch_tw_valuation_inputs(
         except Exception:
             pass
 
+    if trailing_pe is None and a1_unavailable_reason is None:
+        a1_unavailable_reason = "無法取得有效市場本益比（TWSE/TPEx 與備用來源均無資料）"
+
     return {
         "current_price": current_price,
         "trailing_pe": trailing_pe,
@@ -368,6 +396,9 @@ def fetch_tw_valuation_inputs(
         "target_price_analyst": target_price_analyst,  # 通常 None
         "forward_eps_consensus": forward_eps_consensus,
         "eps_ttm": eps_ttm,
+        "a1_unavailable_reason": a1_unavailable_reason if trailing_pe is None else None,
+        "a2_unavailable_reason": a2_unavailable_reason if forward_eps_growth is None else None,
+        "a3_unavailable_reason": a3_unavailable_reason if target_price_analyst is None else None,
     }
 
 
@@ -392,10 +423,15 @@ def compute_taiwan_three_anchors(
     if a1_pe is not None and (a1_pe <= 0 or math.isnan(a1_pe)):
         a1_pe = None
 
+    # 缺位具體原因
+    a1_unavail_reason = val_inputs.get("a1_unavailable_reason") or "官方資料源無有效本益比或為虧損"
+    a2_unavail_reason = val_inputs.get("a2_unavailable_reason") or "台股無公開分析師一致預期覆蓋（缺乏未來 Forward EPS 成長率數據）"
+    a3_unavail_reason = val_inputs.get("a3_unavailable_reason") or "無公開可查證之券商/法人一致預期目標價與預估 EPS"
+
     # A2: PEG 錨
     growth_pct = val_inputs.get("forward_eps_growth")  # 如 15.0 (%)
     a2_pe = None
-    a2_desc = "(A2 unavailable)"
+    a2_desc = f"(A2 unavailable: {a2_unavail_reason})"
     if growth_pct is not None and growth_pct > 0:
         a2_pe = round(peg_benchmark * growth_pct, 2)
         a2_desc = f"{a2_pe:.1f} (PEG {peg_benchmark} × 成長率 {growth_pct}%)"
@@ -404,12 +440,12 @@ def compute_taiwan_three_anchors(
     target_price = val_inputs.get("target_price_analyst")
     fwd_eps = val_inputs.get("forward_eps_consensus") or val_inputs.get("eps_ttm")
     a3_pe = None
-    a3_desc = "(A3 unavailable)"
+    a3_desc = f"(A3 unavailable: {a3_unavail_reason})"
     if target_price is not None and fwd_eps is not None and fwd_eps > 0:
         a3_pe = round(target_price / fwd_eps, 2)
         a3_desc = f"{a3_pe:.1f} (法人目標價 ${target_price} ÷ 預估 EPS ${fwd_eps})"
 
-    a1_desc = f"{a1_pe:.1f} (市場現行本益比)" if a1_pe is not None else "(A1 unavailable)"
+    a1_desc = f"{a1_pe:.1f} (市場現行本益比)" if a1_pe is not None else f"(A1 unavailable: {a1_unavail_reason})"
 
     available_anchors = []
     if a1_pe is not None:
@@ -796,6 +832,14 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
         lines.append(f"- 樂觀公允價：${val.get('fair_price_bull')} 元（Fair PE {val.get('bull_pe')}）")
         lines.append(f"- 基準公允價：${val.get('fair_price_base')} 元（Fair PE {val.get('base_fair_pe')}）")
         lines.append(f"- 悲觀公允價：${val.get('fair_price_bear')} 元（Fair PE {val.get('bear_pe')}）")
+
+    # 錨點說明
+    lines.append("\n**【錨點說明】**")
+    lines.append("- **A1 市場隱含 PE**：現價 ÷ 過去十二個月每股盈餘（TTM EPS），反映市場現在願意給的倍數。")
+    lines.append("- **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期）。")
+    lines.append("- **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法。")
+    lines.append("- **計算規則**：Base = 可用錨點 median；Bull = max × 1.25；Bear = min × 0.70；可用錨點 < 2 則強制標示信心不足並不給目標價。")
+    lines.append("- *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*")
     lines.append("")
 
     # 第一性檢查 (Step 0e)
