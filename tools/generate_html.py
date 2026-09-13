@@ -28,8 +28,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import markdown
-from markdown.extensions.toc import TocExtension
+try:
+    import markdown
+    from markdown.extensions.toc import TocExtension
+    _MARKDOWN_BACKEND = "markdown"
+except ImportError:
+    try:
+        import markdown_it
+        _MARKDOWN_BACKEND = "markdown-it"
+    except ImportError:
+        _MARKDOWN_BACKEND = "fallback"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
@@ -178,8 +186,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
   border: 1px solid var(--border);
   background: var(--bg);
   box-shadow: var(--shadow);
+  max-width: 100%;
 }
-table { border-collapse: collapse; width: 100%; }
+table { border-collapse: collapse; width: 100%; min-width: 500px; }
 th {
   text-align: left;
   padding: 10px 14px;
@@ -263,6 +272,10 @@ PAGE_TEMPLATE = """\
 <meta name="robots" content="noindex,nofollow">
 <meta name="briefing-tier" content="{tier}">
 <title>{title}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"
+  onload="renderMathInElement(document.body, {{delimiters: [{{left: '$$', right: '$$', display: true}}, {{left: '$', right: '$', display: false}}]}});"></script>
 <style>{css}</style>
 </head>
 <body>
@@ -352,18 +365,40 @@ def _ensure_blank_before_tables(md_text: str) -> str:
 def md_to_html(md_text: str) -> tuple[str, str]:
     """Return (toc_html, body_html)."""
     md_text = _ensure_blank_before_tables(md_text)
-    md = markdown.Markdown(
-        extensions=[
-            "tables",
-            "fenced_code",
-            "sane_lists",
-            "nl2br",
-            TocExtension(title="", toc_depth="2-3"),
-        ]
-    )
-    body = md.convert(md_text)
-    toc = md.toc  # type: ignore[attr-defined]
-    return toc, body
+    if _MARKDOWN_BACKEND == "markdown":
+        md = markdown.Markdown(
+            extensions=[
+                "tables",
+                "fenced_code",
+                "sane_lists",
+                "nl2br",
+                TocExtension(title="", toc_depth="2-3"),
+            ]
+        )
+        body = md.convert(md_text)
+        toc = md.toc  # type: ignore[attr-defined]
+        return toc, body
+    elif _MARKDOWN_BACKEND == "markdown-it":
+        md = markdown_it.MarkdownIt("commonmark", {"breaks": True, "html": True}).enable("table")
+        body = md.render(md_text)
+
+        def _slug(text: str) -> str:
+            return re.sub(r"[^a-zA-Z0-9_-]", "-", text.lower())
+
+        # Extract simple TOC from h2 and h3, then give matching tags real ids
+        headers = re.findall(r'<h([23])>([^<]+)</h\1>', body)
+        toc_items = [f'<li><a href="#{_slug(h[1])}">{h[1]}</a></li>' for h in headers]
+        toc = f"<ul>{''.join(toc_items)}</ul>" if toc_items else ""
+
+        def _add_id(m: re.Match) -> str:
+            level, text = m.group(1), m.group(2)
+            return f'<h{level} id="{_slug(text)}">{text}</h{level}>'
+
+        body = re.sub(r'<h([23])>([^<]+)</h\1>', _add_id, body)
+        return toc, body
+    else:
+        # Minimal plain html fallback
+        return "", f"<pre>{md_text}</pre>"
 
 
 def wrap_tables(html: str) -> str:

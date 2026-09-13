@@ -49,7 +49,7 @@ fundamentals cache 處理：
 ---
 
 ## Arguments
-- Single ticker: `/stock-analysis PLTR`
+- Single ticker: `/stock-analysis PLTR` 或台股 `/stock-analysis 3141` / `/stock-analysis 2328.TW`
 - Multiple tickers for comparison: `/stock-analysis DCO AIR`
 - With specific focus: `/stock-analysis TEAM options` (include options strategy suggestions)
 - With portfolio context: `/stock-analysis MU --current` (activates plan.md + positions)
@@ -59,6 +59,7 @@ fundamentals cache 處理：
 ## Workflow
 
 1. **Parse the ticker(s)** from the arguments
+   - **台股自動分流**：若 ticker 為 4-6 位純數字、或帶有 `.TW` / `.TWO` 後綴（如 `3141`、`2328`、`3141.TWO`、`2328.TW`）→ **直接切入台股分析流程**（見下方「台股分析流程（Taiwan Stock Analysis）」章節），讀取 `tw-market-indicators.json` 與台股三錨點估值體系，產出標準化台股研究報告。美股標的則繼續執行下方美股標準流程。
 
 2. **Gather Data** using MCP tools and WebSearch:
 
@@ -508,6 +509,69 @@ raw data 必須是 fact 數值，**不能** 是 derived label。技術面只給 
 ```
 
 > 若 Codex 失敗 → 輸出 `⚠️ Codex 不可用：[error]，跳過第二意見`，繼續正常輸出。
+
+---
+
+## 台股分析流程（Taiwan Stock Analysis）
+
+當偵測到台股標的（4 位數字 / `.TW` / `.TWO`）時，執行以下在地化分析流程，融合籌碼、技術、催化劑與三錨點估值：
+
+### Step 1. 台股資料聚合與快取載入
+執行 `python3 tools/tw_stock_analysis.py <TICKER> --json`（或透過內部模組 `gather_taiwan_stock_data`）：
+- 讀取 `briefing-out/cache/tw-market-indicators.json`（若快取過期則自動透過 `fetch_tw_chips.py`、`tw_technicals.py`、`tw_catalyst_calendar.py` 刷新）
+- 讀取月營收資料（`leading-indicators.json` 或 TWSE/TPEx OpenAPI）
+- 讀取在地化三錨點估值輸入（A1: 市場PE、A2: PEG 成長倍數、A3: 法人目標價隱含PE）
+
+### Step 2. 估值降級與 Display-only 規範
+- **三錨點在地化估值：**
+  - A1 錨：TPEx/TWSE 即時本益比或 Yahoo Finance trailingPE；無則標 `(A1 unavailable)`
+  - A2 錨：Forward EPS growth 自算倍數；台股無統一分析師預估時標 `(A2 unavailable)`
+  - A3 錨：研究報告或法人目標價隱含 PE；無則標 `(A3 unavailable)`
+  - 可用錨點 ≥ 2：Base Fair PE = median(可用錨點)
+  - 可用錨點 < 2：標示 `⚠️ 估值信心不足：僅 N 個錨點可用`，不強行偽造目標價
+- **Display-only 規範：**
+  - 籌碼面結論（集保大戶/外資/投信認養）僅作為觀察層資訊，**不影響 Verdict 方向**
+  - 技術面 Weinstein Stage 4 作為風險 flag 提示，**不單獨翻空基本面 Verdict**
+  - Verdict 仍由第一性 thesis + 估值期望值（EV Σ）驅動
+
+### Step 3. 台股標準報告結構
+產出標準化報告 Markdown：
+```markdown
+# 股票研究報告：[公司名稱]（[代碼.TW/TWO]）（[現價] 元）
+
+## 數據層
+### 月營收趨勢（TWSE/TPEx OpenAPI）
+- 最新月份營收、YoY、MoM 及先行加速/轉負訊號
+
+### 籌碼結構（模組 A）
+- 集保大戶趨勢（千張大戶比、散戶變動、集中週數）
+- 法人動態（外資 1d/5d/20d、投信認養 Stage 1-4 與持股比）
+- 治理安全（董監質押率）
+
+### 技術面定位（模組 B）
+- Weinstein Stage（Stage 1-4 循環狀態）
+- VCP 型態（收縮次數、帶量突破/整理中、Pivot 關鍵點）
+- ATR(14) 與建議動態停損價
+- 相對強度 RS 百分位（vs 加權指數/櫃買指數）
+
+### 催化劑日曆（模組 C）
+- 最近事件（倒數天數）
+- 未來 90 日催化劑列表（除權息、月營收窗、季報截止、自訂事件）
+
+## 估值層
+### 三錨點公允價（台股在地化）
+- A1 / A2 / A3 各錨點數值與說明
+- 估值信心判定（不足時標示 ⚠️ 估值信心不足）與各情境公允價
+
+### 第一性檢查（Step 0e）
+- 核心 thesis：1 句可驗證命題
+- 證偽條件：2-3 個觀察點
+- 機率分布與 EV 計算：Σ(機率 × 各情境公允價)
+
+## Verdict
+- 建議：Buy / Hold / Avoid
+- 附加風險提示（如 Stage 4 技術風險 flag）
+```
 
 ---
 
