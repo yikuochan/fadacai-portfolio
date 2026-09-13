@@ -39,8 +39,16 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-# TPEx openapi SSL context
-_TPEX_CTX = ssl._create_unverified_context()
+# 受控 SSL Context（使用 certifi CA bundle 並載入系統憑證庫）
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
+try:
+    _SSL_CTX.load_default_certs()
+except Exception:
+    pass
 
 
 # ── 工具函式 ────────────────────────────────────────────────────────────────
@@ -412,7 +420,7 @@ class TwseOpenDataInstitutionalFlowProvider(InstitutionalFlowProvider):
             url += f"&d={roc_y}/{d_obj.month:02d}/{d_obj.day:02d}"
         headers = {"User-Agent": USER_AGENT, "Referer": "https://www.tpex.org.tw/"}
         try:
-            resp = requests.get(url, headers=headers, verify=False, timeout=15)
+            resp = requests.get(url, headers=headers, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 tables = data.get("tables", [])
@@ -575,7 +583,7 @@ class TwseOpenDataGovernanceProvider(GovernanceProvider):
     def _fetch_tpex_governance(self, code: str) -> dict:
         url = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap11_O"
         try:
-            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, verify=False, timeout=20)
+            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
                 rows = [x for x in data if x.get("公司代號") == code]
@@ -708,7 +716,7 @@ class TwseOpenDataCatalystProvider(CatalystProvider):
         else:
             url = "https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost"
             try:
-                resp = requests.get(url, headers={"User-Agent": USER_AGENT}, verify=False, timeout=15)
+                resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
                 if resp.status_code == 200:
                     data = resp.json()
                     for item in data:
