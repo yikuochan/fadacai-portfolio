@@ -1,0 +1,51 @@
+{
+  "version": "2026-09-13",
+  "providers": {
+    "tdcc": "twse_opendata",
+    "institutional": "twse_opendata",
+    "price_history": "yahoo_finance",
+    "catalyst": "twse_opendata",
+    "governance": "twse_opendata"
+  },
+  "tickers": [
+    {
+      "code": "2328",
+      "name": "廣宇",
+      "market": "twse"
+    },
+    {
+      "code": "3141",
+      "name": "晶宏",
+      "market": "tpex"
+    }
+  ],
+  "benchmarks": {
+    "twse": "^TWII",
+    "tpex": "^TWOII"
+  },
+  "provider_options": {
+    "yahoo_finance": {
+      "suffix_twse": ".TW",
+      "suffix_tpex": ".TWO"
+    },
+    "finmind": {
+      "api_token_env": "FINMIND_TOKEN"
+    }
+  },
+  "technical_options": {
+    "stop_multiplier": 2.0,
+    "rs_lookback_days": 63,
+    "vcp_min_contractions": 2,
+    "breakout_volume_multiple": 1.5
+  },
+  "custom_events": [
+    {
+      "ticker": "3141",
+      "date": "2026-10-15",
+      "type": "custom",
+      "label": "CB5 轉換起始日",
+      "detail": "第五次無擔保可轉換公司債轉換開始",
+      "impact": "dilution_risk"
+    }
+  ]
+}
