@@ -44,10 +44,10 @@ try:
     _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 except ImportError:
     _SSL_CTX = ssl.create_default_context()
-
-# TPEx openapi 憑證鏈在部分 python/launchd 組合下驗證失敗（Missing Subject Key
-# Identifier）→ 僅對該 host 用 unverified context（先例 send_briefing.py）。
-_TPEX_CTX = ssl._create_unverified_context()
+try:
+    _SSL_CTX.load_default_certs()
+except Exception:
+    pass
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "briefing-out" / "cache"
@@ -831,7 +831,7 @@ def build_tw_monthly(cfg: dict, prev: dict | None, errors: list) -> dict:
         rows += [(r, "twse") for r in twse]
     else:
         errors.append("tw:twse")
-    tpex = with_retry(lambda: http_get_json(TPEX_URL, ctx=_TPEX_CTX), "TPEx", 3)
+    tpex = with_retry(lambda: http_get_json(TPEX_URL, ctx=_SSL_CTX), "TPEx", 3)
     if tpex:
         rows += [(r, "tpex") for r in tpex]
     else:

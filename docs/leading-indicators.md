@@ -94,7 +94,7 @@ DRY_RUN=1 python3 tools/fetch_leading.py --force                  # 只列計畫
 
 ## 注意事項
 
-- TPEx 憑證鏈在部分環境驗證失敗 → 僅該 host 用 unverified SSL context
+- TPEx/TWSE OpenAPI 一律用 certifi + 系統 CA bundle 的標準 TLS 驗證（不使用 unverified context）；連線失敗優雅降級為 `(unavailable)`
 - archive-diff 法需快照累積（7d 窗 ~1 週、30d 窗 ~1 月後可用）；vendor 法需 EODHD Fundamentals Data Feed（7d 欄位）
 - 台股 accel/轉負旗標需 ≥2 個月度數據點，warm-up 期輸出 null 不猜
 - FMP 免費層實測清單（可用 vs 402）見 CLAUDE.md「FMP 免費層實測清單」

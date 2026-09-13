@@ -27,8 +27,10 @@ import logging
 import math
 import os
 import re
+import ssl
 import sys
 import time
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,26 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = ROOT / "briefing-out" / "cache"
 LEADING_CACHE_FILE = CACHE_DIR / "leading-indicators.json"
+
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()
+try:
+    _SSL_CTX.load_default_certs()
+except Exception:
+    pass
+
+
+def _http_get_json(url: str, timeout: int = 15, headers: dict | None = None) -> Any:
+    """受控 SSL 驗證之 HTTP GET JSON 輔助函式"""
+    req = urllib.request.Request(
+        url,
+        headers=headers or {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 # ── Ticker 偵測與正規化 ──────────────────────────────────────────────────────
@@ -155,57 +177,22 @@ def get_monthly_revenue_data(
 
     # 2. 備份：即時抓取 TWSE/TPEx 月營收 OpenAPI
     try:
-        import requests
         if market == "tpex":
             url = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-            r = requests.get(url, timeout=6)
-            if r.status_code == 200:
-                rows = r.json()
+            rows = _http_get_json(url, timeout=15)
+            if isinstance(rows, list):
                 for row in rows:
-                    if str(row.get("SecuritiesCompanyCode", "")).strip() == code:
+                    row_code = str(row.get("公司代號") or row.get("SecuritiesCompanyCode") or row.get("Code") or "").strip()
+                    if row_code == code:
                         yoy = None
                         try:
-                            yoy = float(str(row.get("LastMonthChangeRatio", "")).replace("%", "").strip())
-                        except Exception:
-                            pass
-                        mom = None
-                        try:
-                            mom = float(str(row.get("PreMonthChangeRatio", "")).replace("%", "").strip())
-                        except Exception:
-                            pass
-                        rev_k = None
-                        try:
-                            rev_k = float(str(row.get("CurrentMonthRevenue", "")).replace(",", "").strip())
-                        except Exception:
-                            pass
-                        return {
-                            "status": "ok",
-                            "source": "live:tpex_openapi",
-                            "data_month": str(row.get("Date", "")),
-                            "revenue_curr_month_k": rev_k,
-                            "yoy_pct": yoy,
-                            "mom_pct": mom,
-                            "cum_yoy_pct": None,
-                            "yoy_history": [{"month": str(row.get("Date", "")), "yoy_pct": yoy}] if yoy is not None else [],
-                            "accel_flag": None,
-                            "turned_negative": None,
-                        }
-        else:
-            url = "https://openapi.twse.com.tw/v1/mopsfin_t187ap05_L"
-            r = requests.get(url, timeout=6)
-            if r.status_code == 200:
-                rows = r.json()
-                for row in rows:
-                    if str(row.get("公司代號", "")).strip() == code or str(row.get("Code", "")).strip() == code:
-                        yoy = None
-                        try:
-                            val = row.get("去年同月增減(%)") or row.get("LastMonthChangeRatio")
+                            val = row.get("營業收入-去年同月增減(%)") or row.get("去年同月增減(%)") or row.get("LastMonthChangeRatio")
                             yoy = float(str(val).replace("%", "").strip())
                         except Exception:
                             pass
                         mom = None
                         try:
-                            val = row.get("上月比較增減(%)") or row.get("PreMonthChangeRatio")
+                            val = row.get("營業收入-上月比較增減(%)") or row.get("上月比較增減(%)") or row.get("PreMonthChangeRatio")
                             mom = float(str(val).replace("%", "").strip())
                         except Exception:
                             pass
@@ -215,14 +202,65 @@ def get_monthly_revenue_data(
                             rev_k = float(str(val).replace(",", "").strip())
                         except Exception:
                             pass
+                        cum_yoy = None
+                        try:
+                            val = row.get("累計營業收入-前期比較增減(%)") or row.get("前期比較增減(%)")
+                            cum_yoy = float(str(val).replace("%", "").strip())
+                        except Exception:
+                            pass
+                        month_val = str(row.get("資料年月") or row.get("Date") or row.get("出表日期") or "")
                         return {
                             "status": "ok",
-                            "source": "live:twse_openapi",
-                            "data_month": str(row.get("出表日期", "") or row.get("Date", "")),
+                            "source": "live:tpex_openapi",
+                            "data_month": month_val,
                             "revenue_curr_month_k": rev_k,
                             "yoy_pct": yoy,
                             "mom_pct": mom,
-                            "cum_yoy_pct": None,
+                            "cum_yoy_pct": cum_yoy,
+                            "yoy_history": [{"month": month_val, "yoy_pct": yoy}] if yoy is not None else [],
+                            "accel_flag": None,
+                            "turned_negative": None,
+                        }
+        else:
+            url = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
+            rows = _http_get_json(url, timeout=15)
+            if isinstance(rows, list):
+                for row in rows:
+                    row_code = str(row.get("公司代號") or row.get("SecuritiesCompanyCode") or row.get("Code") or "").strip()
+                    if row_code == code:
+                        yoy = None
+                        try:
+                            val = row.get("營業收入-去年同月增減(%)") or row.get("去年同月增減(%)") or row.get("LastMonthChangeRatio")
+                            yoy = float(str(val).replace("%", "").strip())
+                        except Exception:
+                            pass
+                        mom = None
+                        try:
+                            val = row.get("營業收入-上月比較增減(%)") or row.get("上月比較增減(%)") or row.get("PreMonthChangeRatio")
+                            mom = float(str(val).replace("%", "").strip())
+                        except Exception:
+                            pass
+                        rev_k = None
+                        try:
+                            val = row.get("營業收入-當月營收") or row.get("CurrentMonthRevenue")
+                            rev_k = float(str(val).replace(",", "").strip())
+                        except Exception:
+                            pass
+                        cum_yoy = None
+                        try:
+                            val = row.get("累計營業收入-前期比較增減(%)") or row.get("前期比較增減(%)")
+                            cum_yoy = float(str(val).replace("%", "").strip())
+                        except Exception:
+                            pass
+                        month_val = str(row.get("資料年月") or row.get("出表日期") or row.get("Date") or "")
+                        return {
+                            "status": "ok",
+                            "source": "live:twse_openapi",
+                            "data_month": month_val,
+                            "revenue_curr_month_k": rev_k,
+                            "yoy_pct": yoy,
+                            "mom_pct": mom,
+                            "cum_yoy_pct": cum_yoy,
                             "yoy_history": [{"month": "latest", "yoy_pct": yoy}] if yoy is not None else [],
                             "accel_flag": None,
                             "turned_negative": None,
@@ -281,13 +319,12 @@ def fetch_tw_valuation_inputs(
     # 2. 從 TWSE / TPEx OpenAPI 抓取官方本益比 (A1)
     if market == "tpex":
         try:
-            import requests
             url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
-            r = requests.get(url, timeout=6)
-            if r.status_code == 200:
-                rows = r.json()
+            rows = _http_get_json(url, timeout=15)
+            if isinstance(rows, list):
                 for row in rows:
-                    if str(row.get("SecuritiesCompanyCode", "")).strip() == code:
+                    row_code = str(row.get("SecuritiesCompanyCode") or row.get("公司代號") or row.get("Code") or "").strip()
+                    if row_code == code:
                         pe_str = str(row.get("PriceEarningRatio", "")).replace(",", "").strip()
                         if pe_str and pe_str not in ("-", "--", "0.00", "0"):
                             trailing_pe = float(pe_str)
@@ -296,13 +333,12 @@ def fetch_tw_valuation_inputs(
             logger.warning("[%s] TPEx PE fetch failed: %s", code, e)
     else:
         try:
-            import requests
             url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-            r = requests.get(url, timeout=6)
-            if r.status_code == 200:
-                rows = r.json()
+            rows = _http_get_json(url, timeout=15)
+            if isinstance(rows, list):
                 for row in rows:
-                    if str(row.get("Code", "")).strip() == code:
+                    row_code = str(row.get("Code") or row.get("公司代號") or row.get("SecuritiesCompanyCode") or "").strip()
+                    if row_code == code:
                         pe_str = str(row.get("PEratio", "")).replace(",", "").strip()
                         if pe_str and pe_str not in ("-", "--", "0.00", "0"):
                             trailing_pe = float(pe_str)
@@ -313,19 +349,15 @@ def fetch_tw_valuation_inputs(
     # 3. 嘗試 Yahoo Finance 補充現價或 PE
     if current_price is None or trailing_pe is None:
         try:
-            import requests
             suffix = ".TWO" if market == "tpex" else ".TW"
             symbol = f"{code}{suffix}"
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1mo&interval=1d"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers, timeout=6)
-            if r.status_code == 200:
-                data = r.json()
-                res = data.get("chart", {}).get("result", [])
-                if res:
-                    meta = res[0].get("meta", {})
-                    if current_price is None:
-                        current_price = meta.get("regularMarketPrice")
+            data = _http_get_json(url, timeout=10)
+            res = data.get("chart", {}).get("result", [])
+            if res:
+                meta = res[0].get("meta", {})
+                if current_price is None:
+                    current_price = meta.get("regularMarketPrice")
         except Exception:
             pass
 

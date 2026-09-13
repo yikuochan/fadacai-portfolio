@@ -40,12 +40,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from unittest.mock import MagicMock, patch
+
 from tools.generate_html import colorize_pct, md_to_html, wrap_tables
 from tools.tw_stock_analysis import (
     compute_first_principles_ev,
     compute_taiwan_three_anchors,
     format_taiwan_stock_report,
     gather_taiwan_stock_data,
+    get_monthly_revenue_data,
     is_taiwan_ticker,
     normalize_tw_ticker,
 )
@@ -411,6 +414,62 @@ class TestMockProviderE2E(unittest.TestCase):
         self.assertIn("(unavailable)", report)
         self.assertIn("⚠️ 估值信心不足：無可用錨點", report)
         self.assertIn("建議：Hold (Data Insufficient)", report)
+
+    def test_monthly_revenue_live_mock_success(self):
+        # 測試 mock 模擬 TWSE / TPEx OpenAPI 回傳正確 JSON 格式
+        tpex_mock_rows = [
+            {
+                "公司代號": "3141",
+                "公司名稱": "晶宏",
+                "資料年月": "11508",
+                "營業收入-當月營收": "242,126",
+                "營業收入-上月比較增減(%)": "12.27",
+                "營業收入-去年同月增減(%)": "79.77",
+                "累計營業收入-前期比較增減(%)": "23.93",
+            }
+        ]
+        with patch("tools.tw_stock_analysis._http_get_json", return_value=tpex_mock_rows):
+            with patch("pathlib.Path.exists", return_value=False):
+                res = get_monthly_revenue_data("3141", "tpex")
+                self.assertEqual(res["status"], "ok")
+                self.assertEqual(res["source"], "live:tpex_openapi")
+                self.assertEqual(res["data_month"], "11508")
+                self.assertEqual(res["revenue_curr_month_k"], 242126.0)
+                self.assertEqual(res["yoy_pct"], 79.77)
+                self.assertEqual(res["mom_pct"], 12.27)
+                self.assertEqual(res["cum_yoy_pct"], 23.93)
+
+        twse_mock_rows = [
+            {
+                "公司代號": "2328",
+                "公司名稱": "廣宇",
+                "資料年月": "11508",
+                "營業收入-當月營收": "2,165,981",
+                "營業收入-上月比較增減(%)": "5.68",
+                "營業收入-去年同月增減(%)": "19.67",
+                "累計營業收入-前期比較增減(%)": "-7.84",
+            }
+        ]
+        with patch("tools.tw_stock_analysis._http_get_json", return_value=twse_mock_rows):
+            with patch("pathlib.Path.exists", return_value=False):
+                res = get_monthly_revenue_data("2328", "twse")
+                self.assertEqual(res["status"], "ok")
+                self.assertEqual(res["source"], "live:twse_openapi")
+                self.assertEqual(res["data_month"], "11508")
+                self.assertEqual(res["revenue_curr_month_k"], 2165981.0)
+                self.assertEqual(res["yoy_pct"], 19.67)
+                self.assertEqual(res["mom_pct"], 5.68)
+                self.assertEqual(res["cum_yoy_pct"], -7.84)
+
+    def test_monthly_revenue_ssl_or_network_error_graceful_degradation(self):
+        # 測試連線失敗（SSLError / URLError / Timeout 等）時優雅降級為 (unavailable)
+        with patch("tools.tw_stock_analysis._http_get_json", side_effect=Exception("SSLCertVerificationError")):
+            with patch("pathlib.Path.exists", return_value=False):
+                res = get_monthly_revenue_data("3141", "tpex")
+                self.assertEqual(res["status"], "(unavailable)")
+                self.assertEqual(res["source"], "none")
+                self.assertIsNone(res["data_month"])
+                self.assertIsNone(res["revenue_curr_month_k"])
 
 
 if __name__ == "__main__":
