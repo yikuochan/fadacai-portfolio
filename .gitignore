@@ -10,6 +10,8 @@ data_collection_*.txt
 .env
 briefing-out/
 tools/__pycache__/
+**/__pycache__/
+*.pyc
 
 # MCP config (contains API tokens / credentials — use .mcp.json.example as template)
 .mcp.json
