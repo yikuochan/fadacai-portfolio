@@ -27,6 +27,7 @@ from tools.parse_broker_reports import (
     summarize_broker_consensus,
 )
 from tools.tw_stock_analysis import (
+    compute_first_principles_ev,
     compute_taiwan_three_anchors,
     fetch_tw_valuation_inputs,
     format_taiwan_stock_report,
@@ -310,6 +311,99 @@ EPS (NT\\$) 46.57 69.77 120.77
         md = format_taiwan_stock_report(data)
         # 無本地研報覆蓋時優雅降級，不印該節
         self.assertNotIn("質化檔案索引", md)
+
+
+    def test_bull_cap_with_broker_consensus_over_limit(self):
+        # 模擬 3665：A2=69x，未封頂前 Bull PE=86.25x -> 公允價 5827.05，但券商最高目標價為 3665.0
+        val_inputs = {
+            "current_price": 1980.0,
+            "trailing_pe": 36.36,
+            "forward_eps_growth": 69.0,
+            "target_price_analyst": 3100.0,
+            "forward_eps_consensus": 67.56,
+            "target_price_base_eps": 114.18,
+            "eps_ttm": 54.45,
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 10,
+                "median_target_price": 3100.0,
+                "min_target_price": 2850.0,
+                "max_target_price": 3665.0,
+            },
+        }
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertTrue(res["is_confident"])
+        self.assertTrue(res["bull_capped"])
+        self.assertEqual(res["fair_price_bull"], 3665.0)
+        self.assertIn("NT$3,665 封頂", res["bull_cap_reason"])
+        # Bull PE 被反推鎖定
+        self.assertAlmostEqual(res["bull_pe"], 3665.0 / 67.56, places=2)
+
+        # 檢驗報告文字與 EV
+        ev_res = compute_first_principles_ev(res)
+        self.assertEqual(ev_res["status"], "ok")
+        # EV = 0.25*3665.0 + 0.5*2456.48 + 0.25*1283.64 = 2465.4
+        self.assertAlmostEqual(ev_res["ev_price"], 2465.4, places=1)
+        self.assertLessEqual(ev_res["ev_price"], 3665.0)
+
+        data = {
+            "code": "3665",
+            "name": "貿聯-KY",
+            "market": "twse",
+            "full_symbol": "3665.TW",
+            "valuation": res,
+            "ev": ev_res,
+            "monthly_revenue": {"status": "ok"},
+            "chips": {},
+            "technicals": {},
+            "catalyst": {},
+        }
+        md = format_taiwan_stock_report(data)
+        self.assertIn("（Bull 已依券商最高目標價 NT$3,665 封頂）", md)
+        self.assertIn("$3665.0 元", md)
+
+    def test_bull_cap_without_broker_consensus_over_limit(self):
+        # 無券商覆蓋，A1=20.0，A2=50.0 -> base=(20+50)/2=35.0, raw bull_pe=50*1.25=62.5
+        # 依規則 Bull PE 上限為 A1 PE * 1.50 = 30.0x
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 20.0,
+            "forward_eps_growth": 50.0,
+            "target_price_analyst": None,
+            "forward_eps_consensus": 5.0,
+            "eps_ttm": 5.0,
+            "broker_consensus": None,
+        }
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertTrue(res["is_confident"])
+        self.assertTrue(res["bull_capped"])
+        self.assertEqual(res["bull_pe"], 30.0)  # 20.0 * 1.5
+        self.assertEqual(res["fair_price_bull"], 150.0)  # 5.0 * 30.0
+        self.assertIn("A1 市場 PE 1.5 倍", res["bull_cap_reason"])
+
+    def test_bull_not_capped_when_within_limit(self):
+        # 有券商覆蓋，max_target_price=200.0，A1=20, A2=20, A3=110/5=22 -> max=22 -> bull_pe=22*1.25=27.5 -> raw bull price=137.5 (< 200.0) -> 不觸發封頂
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 20.0,
+            "forward_eps_growth": 20.0,
+            "target_price_analyst": 110.0,
+            "forward_eps_consensus": 5.0,
+            "eps_ttm": 5.0,
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 2,
+                "median_target_price": 110.0,
+                "min_target_price": 100.0,
+                "max_target_price": 200.0,
+            },
+        }
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertTrue(res["is_confident"])
+        self.assertFalse(res["bull_capped"])
+        self.assertIsNone(res["bull_cap_reason"])
+        self.assertEqual(res["bull_pe"], 27.5)  # max(20, 20, 22) * 1.25
+        self.assertEqual(res["fair_price_bull"], 137.5)  # 5.0 * 27.5
 
 
 if __name__ == "__main__":
