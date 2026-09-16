@@ -44,7 +44,7 @@ from tools.fetch_tw_chips import (
     fetch_chips_for_ticker,
     is_cache_fresh,
 )
-from tools.parse_broker_reports import get_tw_broker_consensus
+from tools.parse_broker_reports import format_rel_report_path, get_tw_broker_consensus
 from tools.tw_catalyst_calendar import (
     CACHE_TTL_HOURS as CAT_TTL,
     analyze_catalyst_for_ticker,
@@ -885,6 +885,25 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
     lines.append("- **計算規則**：Base = 可用錨點 median；Bull = max × 1.25；Bear = min × 0.70；可用錨點 < 2 則強制標示信心不足並不給目標價。")
     lines.append("- *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*")
     lines.append("")
+
+    # 本地研報引用與質化檔案索引
+    if broker_consensus and broker_consensus.get("status") == "ok" and broker_consensus.get("broker_details"):
+        lines.append("### 📑 本地研報引用與質化檔案索引")
+        lines.append("> 提示：若需深入質化研究或比對各家論點分歧，可直接讀取上列檔案路徑取得完整研報內文。\n")
+        lines.append("| 券商 | 報告標題 | 報告日期 | 評等 | 目標價 | 預估 EPS | 原始檔案路徑 |")
+        lines.append("|------|----------|------|--------|----------|----------|--------------|")
+        for b in broker_consensus.get("broker_details", []):
+            b_name = (b.get("broker") or "Other").replace("|", "/")
+            b_title = (b.get("title") or b.get("filename") or "—").replace("|", "/")
+            rd = b.get("report_date") or "—"
+            rtg = b.get("rating") or "—"
+            tp = b.get("target_price")
+            tp_str = f"NT$ {tp}" if tp is not None else "—"
+            eps_f = b.get("eps_forecasts", {})
+            eps_str = ", ".join([f"{k}: ${v}" for k, v in sorted(eps_f.items())]) if eps_f else "—"
+            rel_path = format_rel_report_path(b.get("file_path"))
+            lines.append(f"| {b_name} | {b_title} | {rd} | {rtg} | {tp_str} | {eps_str} | `{rel_path}` |")
+        lines.append("")
 
     # 第一性檢查 (Step 0e)
     lines.append("### 第一性檢查（Step 0e）")
