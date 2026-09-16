@@ -400,8 +400,16 @@ def fetch_tw_valuation_inputs(
             forward_eps_growth = broker_consensus.get("eps_growth_pct")
             if target_price_analyst is not None and forward_eps_consensus is not None:
                 a3_unavailable_reason = None
+            elif target_price_analyst is not None:
+                a3_unavailable_reason = "本地研報庫有目標價但缺乏 Forward EPS 預估數據"
+            else:
+                a3_unavailable_reason = "本地研報庫有覆蓋但缺乏目標價資料"
             if forward_eps_growth is not None and forward_eps_growth > 0:
                 a2_unavailable_reason = None
+            elif forward_eps_growth is not None:
+                a2_unavailable_reason = f"本地研報庫顯示 EPS 預估成長率為負或持平（{forward_eps_growth:.1f}%）"
+            else:
+                a2_unavailable_reason = "本地研報庫有覆蓋但缺乏足夠 EPS 預估數據以計算成長率"
         else:
             a3_unavailable_reason = "本地研報庫無覆蓋"
             a2_unavailable_reason = "本地研報庫無覆蓋（缺乏 Forward EPS 預估數據）"

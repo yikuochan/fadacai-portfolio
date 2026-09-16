@@ -306,6 +306,7 @@ def find_reports_for_ticker(
     code = ticker.strip().upper().replace(".TW", "").replace(".TWO", "")
     ref_d = reference_date or date.today()
     cutoff_d = ref_d - timedelta(days=days)
+    code_pattern = re.compile(r"(?<!\d)" + re.escape(code) + r"(?!\d)")
 
     matched_files: list[Path] = []
     for p in reports_dir.rglob("*.md"):
@@ -314,8 +315,8 @@ def find_reports_for_ticker(
         # 排除總經產業匯總與新聞日報
         if any(ex in p.name for ex in MACRO_EXCLUDE_KEYWORDS):
             continue
-        # 檢查個股代碼是否在檔名中 (確保是該標的的個股報告)
-        if code in p.name:
+        # 檢查個股代碼是否在檔名中 (確保是該標的的個股報告，避免誤命中日期/價格/他股代碼中的數字子字串)
+        if code_pattern.search(p.name):
             matched_files.append(p)
 
     parsed_reports: list[dict[str, Any]] = []
