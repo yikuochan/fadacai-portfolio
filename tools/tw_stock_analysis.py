@@ -44,6 +44,7 @@ from tools.fetch_tw_chips import (
     fetch_chips_for_ticker,
     is_cache_fresh,
 )
+from tools.parse_broker_reports import get_tw_broker_consensus
 from tools.tw_catalyst_calendar import (
     CACHE_TTL_HOURS as CAT_TTL,
     analyze_catalyst_for_ticker,
@@ -389,13 +390,45 @@ def fetch_tw_valuation_inputs(
     if trailing_pe is None and a1_unavailable_reason is None:
         a1_unavailable_reason = "無法取得有效市場本益比（TWSE/TPEx 與備用來源均無資料）"
 
+    # 4. 嘗試從本地券商研報庫抽取共識數據 (A2 成長率 & A3 目標價與預估 EPS)
+    broker_consensus = None
+    target_price_base_eps = None
+    try:
+        broker_consensus = get_tw_broker_consensus(code)
+        if broker_consensus.get("status") == "ok":
+            target_price_analyst = broker_consensus.get("median_target_price")
+            forward_eps_consensus = broker_consensus.get("forward_eps_consensus")
+            target_price_base_eps = broker_consensus.get("target_price_base_eps")
+            forward_eps_growth = broker_consensus.get("eps_growth_pct")
+            if target_price_analyst is not None and target_price_base_eps is not None:
+                a3_unavailable_reason = None
+            elif target_price_analyst is not None:
+                a3_unavailable_reason = "本地研報庫有目標價但缺乏對應年度 EPS 預估數據"
+            else:
+                a3_unavailable_reason = "本地研報庫有覆蓋但缺乏目標價資料"
+            if forward_eps_growth is not None and forward_eps_growth > 0:
+                a2_unavailable_reason = None
+            elif forward_eps_growth is not None:
+                a2_unavailable_reason = f"本地研報庫顯示 EPS 預估成長率為負或持平（{forward_eps_growth:.1f}%）"
+            else:
+                a2_unavailable_reason = "本地研報庫有覆蓋但缺乏足夠 EPS 預估數據以計算成長率"
+        else:
+            a3_unavailable_reason = "本地研報庫無覆蓋"
+            a2_unavailable_reason = "本地研報庫無覆蓋（缺乏 Forward EPS 預估數據）"
+    except Exception as e:
+        logger.warning("[%s] Broker reports parsing failed: %s", code, e)
+        a3_unavailable_reason = f"本地研報解析失敗（{e}）"
+        a2_unavailable_reason = f"本地研報解析失敗（{e}）"
+
     return {
         "current_price": current_price,
         "trailing_pe": trailing_pe,
-        "forward_eps_growth": forward_eps_growth,  # 通常 None (台股無統一數據源)
-        "target_price_analyst": target_price_analyst,  # 通常 None
+        "forward_eps_growth": forward_eps_growth,
+        "target_price_analyst": target_price_analyst,
         "forward_eps_consensus": forward_eps_consensus,
+        "target_price_base_eps": target_price_base_eps,
         "eps_ttm": eps_ttm,
+        "broker_consensus": broker_consensus,
         "a1_unavailable_reason": a1_unavailable_reason if trailing_pe is None else None,
         "a2_unavailable_reason": a2_unavailable_reason if forward_eps_growth is None else None,
         "a3_unavailable_reason": a3_unavailable_reason if target_price_analyst is None else None,
@@ -436,14 +469,14 @@ def compute_taiwan_three_anchors(
         a2_pe = round(peg_benchmark * growth_pct, 2)
         a2_desc = f"{a2_pe:.1f} (PEG {peg_benchmark} × 成長率 {growth_pct}%)"
 
-    # A3: 法人目標價隱含 PE
+    # A3: 法人目標價隱含 PE (分母優先採用與券商目標價年度基準對齊之 EPS，即次年 2027 EPS，無 2027 則退回 2026/TTM)
     target_price = val_inputs.get("target_price_analyst")
-    fwd_eps = val_inputs.get("forward_eps_consensus") or val_inputs.get("eps_ttm")
+    a3_base_eps = val_inputs.get("target_price_base_eps") or val_inputs.get("forward_eps_consensus") or val_inputs.get("eps_ttm")
     a3_pe = None
     a3_desc = f"(A3 unavailable: {a3_unavail_reason})"
-    if target_price is not None and fwd_eps is not None and fwd_eps > 0:
-        a3_pe = round(target_price / fwd_eps, 2)
-        a3_desc = f"{a3_pe:.1f} (法人目標價 ${target_price} ÷ 預估 EPS ${fwd_eps})"
+    if target_price is not None and a3_base_eps is not None and a3_base_eps > 0:
+        a3_pe = round(target_price / a3_base_eps, 2)
+        a3_desc = f"{a3_pe:.1f} (法人目標價 ${target_price} ÷ 預估 EPS ${a3_base_eps})"
 
     a1_desc = f"{a1_pe:.1f} (市場現行本益比)" if a1_pe is not None else f"(A1 unavailable: {a1_unavail_reason})"
 
@@ -484,7 +517,7 @@ def compute_taiwan_three_anchors(
 
     # 計算各情境公允價 (若有 current_price 與 PE)
     # 若無 forward EPS，以現價 / A1 倒推 EPS 或用基準倍數計算
-    est_eps = fwd_eps
+    est_eps = val_inputs.get("forward_eps_consensus") or a3_base_eps or val_inputs.get("eps_ttm")
     if est_eps is None and current_price and a1_pe and a1_pe > 0:
         est_eps = round(current_price / a1_pe, 2)
 
@@ -505,6 +538,7 @@ def compute_taiwan_three_anchors(
         "a2_desc": a2_desc,
         "a3_pe": a3_pe,
         "a3_desc": a3_desc,
+        "broker_consensus": val_inputs.get("broker_consensus"),
         "num_available_anchors": num_available,
         "base_fair_pe": base_fair_pe,
         "bull_pe": bull_pe,
@@ -823,6 +857,16 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
     lines.append(f"- **A1 市場 PE**：{val.get('a1_desc')}")
     lines.append(f"- **A2 PEG 成長錨**：{val.get('a2_desc')}")
     lines.append(f"- **A3 分析師目標價隱含 PE**：{val.get('a3_desc')}")
+
+    broker_consensus = val.get("broker_consensus")
+    if broker_consensus and broker_consensus.get("status") == "ok":
+        b_cnt = broker_consensus.get("coverage_count", 0)
+        b_list = ", ".join(broker_consensus.get("brokers", []))
+        med_tp = broker_consensus.get("median_target_price")
+        min_tp = broker_consensus.get("min_target_price")
+        max_tp = broker_consensus.get("max_target_price")
+        lines.append(f"- **研報來源**：本地法人研報庫 (共 {b_cnt} 家券商覆蓋: {b_list})")
+        lines.append(f"- **目標價區間**：中位數 NT$ {med_tp} (最低 NT$ {min_tp} ~ 最高 NT$ {max_tp})")
 
     if val.get("confidence_warning"):
         lines.append(f"\n> **{val.get('confidence_warning')}**")
