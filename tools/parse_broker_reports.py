@@ -272,24 +272,6 @@ def extract_table_eps(head: str) -> dict[str, float]:
 
     return eps_dict
 
-    # 2. 直向年份表格: 每行第一非空欄是 2023, 2024, 2025, 2026(F), 2027(F)
-    for line in table_lines:
-        if "|" in line:
-            cols = [c.strip() for c in line.split("|")]
-            valid_cols = [c for c in cols if c]
-            if valid_cols:
-                m_y = re.search(r"^(202[4-9])", valid_cols[0])
-                if m_y:
-                    y = m_y.group(1)
-                    try:
-                        v = float(valid_cols[-1])
-                        if 0.1 <= v <= 1000.0:
-                            eps_dict[y] = v
-                    except ValueError:
-                        pass
-
-    return eps_dict
-
 
 def filter_eps_series_single_source(eps_dict: dict[str, float], max_ratio: float = 2.5) -> dict[str, float]:
     """
@@ -721,9 +703,6 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
     eps_2027_med = None
     if eps_2027_clean:
         sorted_27 = sorted(eps_2027_clean)
-        n = len(sorted_27)
-        eps_2027_med = round(sorted_27[n // 2] if n % 2 == 1 else (sorted_27[n // 2 - 1] + sorted_27[n // 2]) / 2.0, 2)
-        sorted_27 = sorted(eps_2027_list)
         n = len(sorted_27)
         eps_2027_med = round(sorted_27[n // 2] if n % 2 == 1 else (sorted_27[n // 2 - 1] + sorted_27[n // 2]) / 2.0, 2)
 
