@@ -354,6 +354,7 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
     - 目標價區間 (Min ~ Max)
     - 覆蓋券商家數與明細
     - 共識 Forward EPS (2026/2027)
+    - A3 目標價估值分母 EPS (target_price_base_eps，對齊目標價年度基準，優先 2027 -> 2026)
     - 隱含成長率 CAGR / YoY%
     """
     if not reports:
