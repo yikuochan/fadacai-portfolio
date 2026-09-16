@@ -205,7 +205,7 @@ class TestAnchorExplanationAndUnavailableReasons(unittest.TestCase):
         self.assertNotIn("A2 unavailable", report)
         self.assertNotIn("A3 unavailable", report)
         self.assertNotIn("⚠️ 估值信心不足", report)
-        self.assertIn("Bull 上限約束", report)
+        self.assertIn("公允價階梯約束", report)
 
     def test_two_anchors_available_partial_unavailable_reason(self):
         # 2. 部分缺席情境 (2 個可用，A2 缺席附具體原因)

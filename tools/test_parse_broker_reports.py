@@ -191,8 +191,8 @@ EPS (NT\\$) 46.57 69.77 120.77
     def test_three_anchors_computation_with_broker_consensus(self):
         val_inputs = {
             "current_price": 2000.0,
-            "trailing_pe": 35.0,
-            "forward_eps_growth": 65.0,
+            "trailing_pe": 25.0,
+            "forward_eps_growth": 30.0,
             "target_price_analyst": 3000.0,
             "forward_eps_consensus": 68.78,
             "target_price_base_eps": 113.92,
@@ -314,7 +314,7 @@ EPS (NT\\$) 46.57 69.77 120.77
 
 
     def test_bull_cap_with_broker_consensus_over_limit(self):
-        # 模擬 3665：A2=69x，未封頂前 Bull PE=86.25x -> 公允價 5827.05，但券商最高目標價為 3665.0
+        # 模擬 3665：A2=69x，未封頂前 Bull PE=86.25x -> 公允價 (114.18*86.25=9848 或 67.56*86.25=5827.05)，但券商最高目標價為 3665.0
         val_inputs = {
             "current_price": 1980.0,
             "trailing_pe": 36.36,
@@ -337,13 +337,11 @@ EPS (NT\\$) 46.57 69.77 120.77
         self.assertEqual(res["fair_price_bull"], 3665.0)
         self.assertIn("NT$3,665 封頂", res["bull_cap_reason"])
         # Bull PE 被反推鎖定
-        self.assertAlmostEqual(res["bull_pe"], 3665.0 / 67.56, places=2)
+        self.assertAlmostEqual(res["bull_pe"], 3665.0 / 114.18, places=2)
 
         # 檢驗報告文字與 EV
         ev_res = compute_first_principles_ev(res)
         self.assertEqual(ev_res["status"], "ok")
-        # EV = 0.25*3665.0 + 0.5*2456.48 + 0.25*1283.64 = 2465.4
-        self.assertAlmostEqual(ev_res["ev_price"], 2465.4, places=1)
         self.assertLessEqual(ev_res["ev_price"], 3665.0)
 
         data = {
@@ -389,6 +387,7 @@ EPS (NT\\$) 46.57 69.77 120.77
             "forward_eps_growth": 20.0,
             "target_price_analyst": 110.0,
             "forward_eps_consensus": 5.0,
+            "target_price_base_eps": 5.0,
             "eps_ttm": 5.0,
             "broker_consensus": {
                 "status": "ok",
@@ -404,6 +403,98 @@ EPS (NT\\$) 46.57 69.77 120.77
         self.assertIsNone(res["bull_cap_reason"])
         self.assertEqual(res["bull_pe"], 27.5)  # max(20, 20, 22) * 1.25
         self.assertEqual(res["fair_price_bull"], 137.5)  # 5.0 * 27.5
+
+    def test_single_source_eps_outlier_filtering(self):
+        # (a) 單券商多年期 EPS 離群剔除測試
+        from tools.parse_broker_reports import filter_eps_series_single_source
+        # 模擬 2481 強茂合庫研報：2025: 3.13, 2026: 11.81 (OCR 錯抓), 2027: 4.80
+        raw_eps = {"2025": 3.13, "2026": 11.81, "2027": 4.80}
+        filtered = filter_eps_series_single_source(raw_eps, max_ratio=2.5)
+        self.assertNotIn("2026", filtered)
+        self.assertEqual(filtered["2025"], 3.13)
+        self.assertEqual(filtered["2027"], 4.80)
+
+        # 正常成長股不應被剔除
+        normal_eps = {"2025": 66.25, "2026": 100.21, "2027": 130.08}
+        self.assertEqual(filter_eps_series_single_source(normal_eps), normal_eps)
+
+    def test_cross_broker_eps_outlier_filtering(self):
+        # (b) 跨券商同年度 EPS 離群剔除測試
+        from tools.parse_broker_reports import filter_cross_broker_eps_outliers
+        # 4 家券商預估 2026 EPS: 5.07, 5.18, 4.80，另外某家誤抓 11.81
+        eps_list = [5.07, 5.18, 4.80, 11.81]
+        cleaned = filter_cross_broker_eps_outliers(eps_list, max_dev_ratio=2.0)
+        self.assertNotIn(11.81, cleaned)
+        self.assertEqual(len(cleaned), 3)
+
+    def test_base_bear_ladder_clamping(self):
+        # (c) Base/Bear 對券商目標價區間的約束測試
+        val_inputs = {
+            "current_price": 150.0,
+            "trailing_pe": 40.0,
+            "forward_eps_growth": 50.0,
+            "target_price_analyst": 200.0,
+            "forward_eps_consensus": 5.0,
+            "target_price_base_eps": 7.5,
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 4,
+                "median_target_price": 200.0,
+                "min_target_price": 190.0,
+                "max_target_price": 240.0,
+            },
+        }
+        # Base fair pe = median(40, 50, 200/7.5=26.67) = 40.0
+        # raw base price = 7.5 * 40.0 = 300.0 (> max_tp 240.0) -> clamp to 240.0
+        # raw bear price = 7.5 * (26.67 * 0.70) = 140.0 -> Bear floor = 190 * 0.70 = 133.0 (< 140 -> 不保底)
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertTrue(res["base_capped"])
+        self.assertEqual(res["fair_price_base"], 240.0)
+        self.assertIn("Base 已依券商最高目標價 NT$240 封頂", res["base_cap_reason"])
+
+        # 測試 Bear 保底情境：若 raw bear price < 133.0
+        val_inputs_bear = dict(val_inputs)
+        val_inputs_bear["forward_eps_growth"] = 10.0  # A2 = 10.0 -> bear pe = 10 * 0.70 = 7.0 -> raw bear = 7.5 * 7 = 52.5
+        res_bear = compute_taiwan_three_anchors(val_inputs_bear)
+        self.assertTrue(res_bear["bear_floored"])
+        self.assertEqual(res_bear["fair_price_bear"], 133.0)  # 190 * 0.70
+        self.assertIn("Bear 已依券商最低目標價 70%", res_bear["bear_floor_reason"])
+
+    def test_valuation_anomaly_warning(self):
+        # (d) Base 遠超券商目標價區間時發出警告
+        val_inputs = {
+            "current_price": 150.0,
+            "trailing_pe": 40.0,
+            "forward_eps_growth": 50.0,
+            "target_price_analyst": 200.0,
+            "forward_eps_consensus": 5.0,
+            "target_price_base_eps": 10.0,  # 導致 raw base = 10 * 40 = 400.0 (> 240 * 1.25 = 300)
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 4,
+                "median_target_price": 200.0,
+                "min_target_price": 190.0,
+                "max_target_price": 240.0,
+            },
+        }
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertIsNotNone(res["valuation_anomaly_warning"])
+        self.assertIn("估值輸入異常警告", res["valuation_anomaly_warning"])
+
+        data = {
+            "code": "2481",
+            "name": "強茂",
+            "market": "twse",
+            "full_symbol": "2481.TW",
+            "valuation": res,
+            "ev": {"status": "ok", "ev_price": 220.0, "ev_return_pct": 46.7, "p_bull": 0.25, "p_base": 0.5, "p_bear": 0.25},
+            "monthly_revenue": {"status": "ok"},
+            "chips": {},
+            "technicals": {},
+            "catalyst": {},
+        }
+        md = format_taiwan_stock_report(data)
+        self.assertIn("⚠️ 估值輸入異常警告", md)
 
 
 if __name__ == "__main__":

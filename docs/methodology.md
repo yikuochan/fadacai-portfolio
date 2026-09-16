@@ -8,10 +8,14 @@
   - **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期；台股經 `tools/parse_broker_reports.py` 解析 `research/analyst_reports/` 本地券商研報取得）。
   - **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法（台股來源為本地研報庫，分母優先採用與券商 12 個月目標價基準對齊之次年 2027 EPS 共識，次年缺值時退回當年 2026 EPS；無覆蓋則降級標示 unavailable）。
   - **計算規則**：Base = median；Bull = max × 1.25；Bear = min × 0.70。`pe_ratio == 0.0` / `peg_ratio == 0.0` 或缺值 → 自動丟棄該錨，標 `(anchor unavailable: 具體原因)`。可用錨點 < 2 則強制標示「⚠️ 估值信心不足」且不強行提供目標價。
-  - **Bull 上限約束（台股）**：為避免高成長/景氣循環股在 A2 成長錨（PEG=1 × 高成長率）被過度放大而導出脫離現實的樂觀尾巴（例如 3665 出現 86x PE、+194% 公允價扭曲 EV），對 Bull 公允價實施約束：
-    - **有本地券商研報覆蓋時**：Bull 公允價以全市場券商最高目標價（`broker_consensus.max_target_price`）為上限，若超過則 clamp 封頂，並在報告中明確標註（例：`Bull 已依券商最高目標價 NT$3,665 封頂`）。
+  - **公允價階梯約束與合理性鎖定（台股）**：為避免高成長/景氣循環股在 A2 成長錨（PEG=1 × 高成長率）被過度放大或受個別資料擾動而導出脫離現實的樂觀尾巴（例如 3665 出現 86x PE、+194% 公允價扭曲 EV，或 2481 離群 EPS 導致 Base 473 遠超市場最高目標價 240）：
+    - **有本地券商研報覆蓋時**：
+      - **Base 與 Bull 封頂約束**：Base 與 Bull 公允價均以全市場券商最高目標價（`broker_consensus.max_target_price`）為上限，若超過則 clamp 封頂，並在報告中明確標註（例：`Bull 已依券商最高目標價 NT$3,665 封頂`、`Base 已依券商最高目標價 NT$240 封頂`）。
+      - **Bear 下緣保底約束**：Bear 公允價不得低於券商最低目標價之合理下緣（`broker_consensus.min_target_price * 0.70`），低於則保底並標明。
+      - **輸入異常警告**：若原始未受約束之 Base 公允價遠高於券商最高目標價（如超過 1.25 倍），視為輸入異常（如 EPS 基期或估值倍數失真），在報告中主動發出醒目警告（`⚠️ 估值輸入異常警告`）而非靜默 clamp。
+      - **EPS 基準一致性**：基準 EPS 優先採用與 A3/券商目標價基期一致之預估獲利（`target_price_base_eps`，通常為次年獲利），確保乘數與盈餘基期對齊。
     - **無券商覆蓋時**：退而使用保守的絕對 PE 上限，Bull PE 不得超過 A1 市場 PE 的 1.50 倍（`a1_pe * 1.50`）。
-    - Base 與 Bear 情境保持原邏輯，EV 計算依受限後的 Bull 公允價同步反映。
+    - **EPS 離群剔除**：在 `tools/parse_broker_reports.py` 中實施（1）單一券商多年度 EPS 合理性過濾（剔除相鄰年度落差 > 2.5x 的 OCR/解析離群值）；（2）跨券商同年度 EPS 離群過濾（剔除相對中位數偏差 > 2.0x 者），避免錯值污染共識。
   - *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*
 - **Thesis Ledger（`tools/thesis_ledger.py`）** — 把帶觸發點的 thesis 登錄進帳本，到期（如財報日）自動回頭抓實際數字驗收 passed/failed，累積命中率。詳見 [`thesis-ledger.md`](thesis-ledger.md)。
 - **Thesis 驗證 → 股價影響（D2 三桶分解）** — thesis verdict 不只是分類；`resolve` 時帶結構化旗標：`fair_value_before/after`（三錨點重算）+ `price_impact_pct` + `impact_decomp`（thesis 成分 vs 倍數重估成分分解）。實例：AVBO partial → `thesis +6%(FY27 AI guide 確認)/multiple −16%(GM 壓縮 re-rate)=net −9.8%`。
