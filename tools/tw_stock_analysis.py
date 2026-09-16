@@ -891,7 +891,7 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
         lines.append("### 📑 本地研報引用與質化檔案索引")
         lines.append("> 提示：若需深入質化研究或比對各家論點分歧，可直接讀取上列檔案路徑取得完整研報內文。\n")
         lines.append("| 券商 | 報告標題 | 報告日期 | 評等 | 目標價 | 預估 EPS | 原始檔案路徑 |")
-        lines.append("|------|----------|------|--------|----------|--------------|")
+        lines.append("|------|----------|------|--------|----------|----------|--------------|")
         for b in broker_consensus.get("broker_details", []):
             b_name = (b.get("broker") or "Other").replace("|", "/")
             b_title = (b.get("title") or b.get("filename") or "—").replace("|", "/")
