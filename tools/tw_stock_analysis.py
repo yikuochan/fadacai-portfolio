@@ -516,8 +516,10 @@ def compute_taiwan_three_anchors(
         is_confident = False
 
     # 計算各情境公允價 (若有 current_price 與 PE)
-    # 若無 forward EPS，以現價 / A1 倒推 EPS 或用基準倍數計算
-    est_eps = val_inputs.get("forward_eps_consensus") or a3_base_eps or val_inputs.get("eps_ttm")
+    # 基準 EPS 優先順序：
+    # 1. 若有券商目標價覆蓋且提供 A3 基準 EPS (target_price_base_eps，通常為次年 2027)，優先使用以與 A3 / 券商目標價基期一致
+    # 2. 否則退回 forward_eps_consensus (2026/2027) -> eps_ttm -> 現價 / A1
+    est_eps = val_inputs.get("target_price_base_eps") or val_inputs.get("forward_eps_consensus") or val_inputs.get("eps_ttm")
     if est_eps is None and current_price and a1_pe and a1_pe > 0:
         est_eps = round(current_price / a1_pe, 2)
 
@@ -526,18 +528,44 @@ def compute_taiwan_three_anchors(
     fair_price_bear = None
     bull_capped = False
     bull_cap_reason = None
-    if est_eps is not None and is_confident and base_fair_pe is not None:
-        fair_price_base = round(est_eps * base_fair_pe, 2)
-        raw_bull_price = round(est_eps * (bull_pe or base_fair_pe * 1.25), 2)
-        fair_price_bear = round(est_eps * (bear_pe or base_fair_pe * 0.70), 2)
+    base_capped = False
+    base_cap_reason = None
+    bear_floored = False
+    bear_floor_reason = None
+    valuation_anomaly_warning = None
 
-        # Bull 上限約束 (防止樂觀尾巴脫離現實)
+    if est_eps is not None and is_confident and base_fair_pe is not None:
+        raw_base_price = round(est_eps * base_fair_pe, 2)
+        raw_bull_price = round(est_eps * (bull_pe or base_fair_pe * 1.25), 2)
+        raw_bear_price = round(est_eps * (bear_pe or base_fair_pe * 0.70), 2)
+
         broker_consensus = val_inputs.get("broker_consensus")
         max_tp = None
+        min_tp = None
         if broker_consensus and isinstance(broker_consensus, dict):
             max_tp = broker_consensus.get("max_target_price")
+            min_tp = broker_consensus.get("min_target_price")
 
+        # ── 1. Base / Bull / Bear 階梯對券商目標價區間的約束與異常警告 ──
         if max_tp is not None and max_tp > 0:
+            # 異常檢測：若原始 Base 公允價遠超券商最高目標價（例如超過 1.25 倍），視為輸入異常（如 EPS 基期或乘數失真）發出警告
+            if raw_base_price > max_tp * 1.25:
+                valuation_anomaly_warning = (
+                    f"⚠️ 估值輸入異常警告：原始 Base 公允價 NT${raw_base_price:.2f} 遠高於券商最高目標價 NT${max_tp:.2f}，"
+                    f"可能存在 EPS 基期或估值倍數落差，已強制約束公允價階梯。"
+                )
+
+            # Base 公允價約束：不得超過券商最高目標價
+            if raw_base_price > max_tp:
+                fair_price_base = round(max_tp, 2)
+                base_capped = True
+                base_cap_reason = f"Base 已依券商最高目標價 NT${max_tp:,.0f} 封頂"
+                if est_eps > 0:
+                    base_fair_pe = round(fair_price_base / est_eps, 2)
+            else:
+                fair_price_base = raw_base_price
+
+            # Bull 公允價約束：不得超過券商最高目標價
             if raw_bull_price > max_tp:
                 fair_price_bull = round(max_tp, 2)
                 bull_capped = True
@@ -546,9 +574,23 @@ def compute_taiwan_three_anchors(
                     bull_pe = round(fair_price_bull / est_eps, 2)
             else:
                 fair_price_bull = raw_bull_price
+
+            # Bear 公允價約束：不得低於券商最低目標價之合理下緣（min_target_price × 0.70）
+            if min_tp is not None and min_tp > 0:
+                bear_floor = round(min_tp * 0.70, 2)
+                if raw_bear_price < bear_floor:
+                    fair_price_bear = bear_floor
+                    bear_floored = True
+                    bear_floor_reason = f"Bear 已依券商最低目標價 70%（NT${bear_floor:,.0f}）保底"
+                    if est_eps > 0:
+                        bear_pe = round(fair_price_bear / est_eps, 2)
+                else:
+                    fair_price_bear = raw_bear_price
+            else:
+                fair_price_bear = raw_bear_price
         else:
-            # 無券商覆蓋：退而使用保守的絕對 PE 上限 (例如市場 A1 PE × 1.50)
-            # 若 A1 PE 可用且合理，Bull PE 上限不超過 A1 PE × 1.50
+            # 無券商覆蓋：退而使用保守的絕對 PE 上限
+            fair_price_base = raw_base_price
             if a1_pe is not None and a1_pe > 0:
                 max_allowed_bull_pe = round(a1_pe * 1.50, 2)
                 if bull_pe is not None and bull_pe > max_allowed_bull_pe:
@@ -560,6 +602,7 @@ def compute_taiwan_three_anchors(
                     fair_price_bull = raw_bull_price
             else:
                 fair_price_bull = raw_bull_price
+            fair_price_bear = raw_bear_price
 
     return {
         "current_price": current_price,
@@ -580,6 +623,11 @@ def compute_taiwan_three_anchors(
         "fair_price_bear": fair_price_bear,
         "bull_capped": bull_capped,
         "bull_cap_reason": bull_cap_reason,
+        "base_capped": base_capped,
+        "base_cap_reason": base_cap_reason,
+        "bear_floored": bear_floored,
+        "bear_floor_reason": bear_floor_reason,
+        "valuation_anomaly_warning": valuation_anomaly_warning,
         "confidence_warning": confidence_warning,
         "is_confident": is_confident,
     }
@@ -905,12 +953,17 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
     if val.get("confidence_warning"):
         lines.append(f"\n> **{val.get('confidence_warning')}**")
 
+    if val.get("valuation_anomaly_warning"):
+        lines.append(f"\n> **{val.get('valuation_anomaly_warning')}**")
+
     if val.get("is_confident") and val.get("base_fair_pe") is not None:
         lines.append(f"\n**Base Fair PE** = {val.get('base_fair_pe'):.1f}（median 可用錨點）")
         bull_note = f"（{val.get('bull_cap_reason')}）" if val.get("bull_capped") and val.get("bull_cap_reason") else ""
+        base_note = f"（{val.get('base_cap_reason')}）" if val.get("base_capped") and val.get("base_cap_reason") else ""
+        bear_note = f"（{val.get('bear_floor_reason')}）" if val.get("bear_floored") and val.get("bear_floor_reason") else ""
         lines.append(f"- 樂觀公允價：${val.get('fair_price_bull')} 元（Fair PE {val.get('bull_pe')}）{bull_note}")
-        lines.append(f"- 基準公允價：${val.get('fair_price_base')} 元（Fair PE {val.get('base_fair_pe')}）")
-        lines.append(f"- 悲觀公允價：${val.get('fair_price_bear')} 元（Fair PE {val.get('bear_pe')}）")
+        lines.append(f"- 基準公允價：${val.get('fair_price_base')} 元（Fair PE {val.get('base_fair_pe')}）{base_note}")
+        lines.append(f"- 悲觀公允價：${val.get('fair_price_bear')} 元（Fair PE {val.get('bear_pe')}）{bear_note}")
 
     # 錨點說明
     lines.append("\n**【錨點說明】**")
@@ -918,7 +971,7 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
     lines.append("- **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期）。")
     lines.append("- **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法。")
     lines.append("- **計算規則**：Base = 可用錨點 median；Bull = max × 1.25；Bear = min × 0.70；可用錨點 < 2 則強制標示信心不足並不給目標價。")
-    lines.append("- **Bull 上限約束**：若有本地券商研報覆蓋，Bull 公允價不得超過全市場券商最高目標價（超過則封頂）；若無券商覆蓋，Bull PE 不超過 A1 市場 PE 1.5 倍，避免樂觀情境過度投射。")
+    lines.append("- **公允價階梯約束（台股）**：若有本地券商研報覆蓋，Base 與 Bull 公允價不得超過全市場券商最高目標價（超過則封頂），Bear 公允價不得低於券商最低目標價 70%（低於則保底），若原始 Base 遠超券商目標價區間則發出輸入異常警告；無券商覆蓋時，Bull PE 不超過 A1 市場 PE 1.5 倍，避免估值與現實法人預期脫節。")
     lines.append("- *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*")
     lines.append("")
 

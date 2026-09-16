@@ -217,27 +217,255 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
 
     # 1. 匹配損益表或行文中的 EPS：2026 EPS 105.31 / 2027 EPS 135.48
     # 2026 / 2027 年稅後 EPS 分別至 105.31 元 及 135.48 元
-    m_split = re.search(r"2026\s*[/、及與,]\s*2027\s*年[^\d\n]*EPS[^\d\n]*([0-9]{1,3}\.[0-9]{1,2})[^\d\n]*([0-9]{1,3}\.[0-9]{1,2})", head, re.I)
-    if m_split:
+def extract_table_eps(head: str) -> dict[str, float]:
+    """從 Markdown 表格中抽取多年期 EPS"""
+    eps_dict: dict[str, float] = {}
+    table_lines = head.splitlines()
+
+    # 1. 橫向年份表格: 表頭含有 2024, 2025, 2026 等
+    for i, line in enumerate(table_lines):
+        if re.search(r"202[4-7]", line) and "|" in line:
+            headers = [c.strip() for c in line.split("|")]
+            # 排除非表格長文字段落
+            if any(len(c) > 40 for c in headers):
+                continue
+            year_cols: dict[int, str] = {}
+            for col_idx, h in enumerate(headers):
+                m_y = re.search(r"(202[4-9])", h)
+                if m_y:
+                    year_cols[col_idx] = m_y.group(1)
+            if len(year_cols) >= 2:
+                for j in range(i + 1, min(len(table_lines), i + 15)):
+                    row = table_lines[j]
+                    if re.search(r"(?:每股盈餘|EPS|稅後\s*EPS)", row, re.I):
+                        cols = [c.strip() for c in row.split("|")]
+                        row_eps: dict[str, float] = {}
+                        for c_idx, y in year_cols.items():
+                            if c_idx < len(cols):
+                                val_str = cols[c_idx]
+                                try:
+                                    v = float(val_str)
+                                    if 0.1 <= v <= 1000.0:
+                                        row_eps[y] = v
+                                except ValueError:
+                                    pass
+                        if len(row_eps) >= len(eps_dict):
+                            eps_dict.update(row_eps)
+                if eps_dict:
+                    return eps_dict
+
+    # 2. 直向年份表格: 每行第一非空欄是 2023, 2024, 2025, 2026(F), 2027(F)
+    for line in table_lines:
+        if "|" in line:
+            cols = [c.strip() for c in line.split("|")]
+            valid_cols = [c for c in cols if c]
+            if valid_cols:
+                m_y = re.search(r"^(202[4-9])", valid_cols[0])
+                if m_y:
+                    y = m_y.group(1)
+                    try:
+                        v = float(valid_cols[-1])
+                        if 0.1 <= v <= 1000.0:
+                            eps_dict[y] = v
+                    except ValueError:
+                        pass
+
+    return eps_dict
+
+
+def filter_eps_series_single_source(eps_dict: dict[str, float], max_ratio: float = 2.5) -> dict[str, float]:
+    """
+    單一券商多年度 EPS 合理性過濾（防 OCR/解析錯抓離群值）：
+    - 數值邊界：0.1 <= EPS <= 1000.0
+    - 相鄰年度變動檢查：相鄰年度獲利倍數落差超過 max_ratio（預設 2.5x，即成長 >150% 或衰退 >60%）
+      若有 >=3 個年度，嘗試找出並剔除破壞趨勢一致性的離群年度；
+      若僅有 2 個年度且差距超過 3.0x，則因無法判斷誰對，予以清空。
+    """
+    valid = {k: v for k, v in eps_dict.items() if 0.1 <= v <= 1000.0}
+    if len(valid) <= 1:
+        return valid
+
+    sorted_years = sorted(valid.keys(), key=lambda y: int(y) if y.isdigit() else 9999)
+
+    def get_max_adjacent_ratio(years: list[str], d: dict[str, float]) -> float:
+        r_max = 1.0
+        for i in range(len(years) - 1):
+            v1, v2 = d[years[i]], d[years[i + 1]]
+            if v1 <= 0 or v2 <= 0:
+                return 9999.0
+            r = max(v1 / v2, v2 / v1)
+            if r > r_max:
+                r_max = r
+        return r_max
+
+    curr_max_r = get_max_adjacent_ratio(sorted_years, valid)
+    if curr_max_r <= max_ratio:
+        return valid
+
+    if len(sorted_years) == 2:
+        # 兩年度落差超過 max_ratio，若超過 3.0 視為衝突不可靠
+        if curr_max_r > 3.0:
+            return {}
+        return valid
+
+    # 當 >= 3 個年度時，找出剔除哪 1 個年度後相鄰比值最低且 <= max_ratio
+    min_max_ratio = 9999.0
+    best_subset = valid
+    for y_drop in sorted_years:
+        rem_years = [y for y in sorted_years if y != y_drop]
+        r = get_max_adjacent_ratio(rem_years, valid)
+        if r < min_max_ratio:
+            min_max_ratio = r
+            best_subset = {y: valid[y] for y in rem_years}
+
+    if min_max_ratio <= max_ratio:
+        return best_subset
+
+    return {}
+
+
+def filter_cross_broker_eps_outliers(eps_list: list[float], max_dev_ratio: float = 2.0) -> list[float]:
+    """
+    跨券商同年度 EPS 離群剔除：
+    - 排除明顯離群（相對於中位數偏差超過 max_dev_ratio，如 2.0x 倍數差距）
+    - 避免單一券商的異常值污染共識中位數
+    """
+    valid = [v for v in eps_list if v is not None and v > 0]
+    if len(valid) <= 2:
+        if len(valid) == 2:
+            r = max(valid[0] / valid[1], valid[1] / valid[0])
+            if r > 2.5:
+                return [min(valid)]
+        return valid
+
+    sorted_v = sorted(valid)
+    n = len(sorted_v)
+    med = sorted_v[n // 2] if n % 2 == 1 else (sorted_v[n // 2 - 1] + sorted_v[n // 2]) / 2.0
+
+    filtered = []
+    for v in valid:
+        ratio = max(v / med, med / v)
+        if ratio <= max_dev_ratio:
+            filtered.append(v)
+
+    return filtered or valid
+
+
+def extract_eps_forecasts(content: str) -> dict[str, float]:
+    """
+    從報告表格或內文中提取預估 EPS (如 2026, 2027, 2028 等)
+    並自動執行單來源相鄰年度合理性檢查與離群剔除。
+    """
+    head = content[:6000]
+    eps_dict: dict[str, float] = extract_table_eps(head)
+
+    # 1. 雙年度 / 連續年度 EPS：2026/2027 年 EPS 分別為 5.18 元 及 7.93 元
+    pat_pair1 = re.finditer(
+        r"(202[5-9])\s*[/、及與,\-]\s*(?:20)?(2[5-9])\s*年[^\d\n,，;；]{0,15}(?:EPS|每股盈餘)[^\d\n,，;；]{0,10}(?:為|至|來到|分別為)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?\s*[/、及與,]\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
+        head,
+        re.I,
+    )
+    for m in pat_pair1:
+        y1 = m.group(1)
+        y2_short = m.group(2)
+        y2 = "20" + y2_short if len(y2_short) == 2 else y2_short
+        v1, v2 = float(m.group(3)), float(m.group(4))
+        if 0.1 <= v1 <= 500.0 and 0.1 <= v2 <= 500.0:
+            if y1 not in eps_dict:
+                eps_dict[y1] = v1
+            if y2 not in eps_dict:
+                eps_dict[y2] = v2
+
+    pat_pair2 = re.finditer(
+        r"(?:EPS|每股盈餘)[^\d\n,，;；]{0,15}(202[5-9])\s*[/、及與,\-]\s*(?:20)?(2[5-9])\s*年[^\d\n,，;；]{0,10}(?:為|至|來到|分別為)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?\s*[/、及與,]\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
+        head,
+        re.I,
+    )
+    for m in pat_pair2:
+        y1 = m.group(1)
+        y2_short = m.group(2)
+        y2 = "20" + y2_short if len(y2_short) == 2 else y2_short
+        v1, v2 = float(m.group(3)), float(m.group(4))
+        if 0.1 <= v1 <= 500.0 and 0.1 <= v2 <= 500.0:
+            if y1 not in eps_dict:
+                eps_dict[y1] = v1
+            if y2 not in eps_dict:
+                eps_dict[y2] = v2
+
+    pat_pair3 = re.finditer(
+        r"(202[5-9])\s*年[^\d\n,，;；]{0,10}(?:EPS|每股盈餘)[\s:：=]*(?:為|至|來到)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?[/、及與,]\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
+        head,
+        re.I,
+    )
+    for m in pat_pair3:
+        y_end = int(m.group(1))
+        y_start = y_end - 1
+        v1, v2 = float(m.group(2)), float(m.group(3))
+        if 0.1 <= v1 <= 500.0 and 0.1 <= v2 <= 500.0:
+            if str(y_start) not in eps_dict:
+                eps_dict[str(y_start)] = v1
+            if str(y_end) not in eps_dict:
+                eps_dict[str(y_end)] = v2
+
+    # 2. 跨年度並列格式：預估 26 年 65.33；27 年 104.69 元
+    m_multi_year = re.finditer(
+        r"(202[5-9]|2[5-9])\s*年[^\d\n,，;；]{0,10}([0-9]{1,3}\.[0-9]{1,2})\s*元?[;；,，]?\s*(202[5-9]|2[5-9])\s*年[^\d\n,，;；]{0,10}([0-9]{1,3}\.[0-9]{1,2})",
+        head,
+        re.I,
+    )
+    for m in m_multi_year:
+        y1_raw, v1_raw, y2_raw, v2_raw = m.group(1), m.group(2), m.group(3), m.group(4)
+        y1_clean = "20" + y1_raw if len(y1_raw) == 2 else y1_raw
+        y2_clean = "20" + y2_raw if len(y2_raw) == 2 else y2_raw
         try:
-            eps_dict["2026"] = float(m_split.group(1))
-            eps_dict["2027"] = float(m_split.group(2))
+            v1, v2 = float(v1_raw), float(v2_raw)
+            if 0.1 <= v1 <= 500.0 and 0.1 <= v2 <= 500.0:
+                if y1_clean not in eps_dict:
+                    eps_dict[y1_clean] = v1
+                if y2_clean not in eps_dict:
+                    eps_dict[y2_clean] = v2
+        except ValueError:
+            pass
+
+    # 3. 元富格式：2026F EPS ... 2027F EPS ... 本次 5.07 ... 本次 7.60
+    m_yf = re.search(
+        r"2026[F\s]*EPS[^\n]*2027[F\s]*EPS[^\n]*\n+([0-9]{1,3}\.[0-9]{2})\s*本次\n+([0-9]{1,3}\.[0-9]{2})\s*前次\n+([0-9]{1,3}\.[0-9]{2})\s*本次\n+([0-9]{1,3}\.[0-9]{2})",
+        head,
+        re.I,
+    )
+    if m_yf:
+        try:
+            v26_curr = float(m_yf.group(2))
+            v27_curr = float(m_yf.group(4))
+            if 0.1 <= v26_curr <= 500.0 and "2026" not in eps_dict:
+                eps_dict["2026"] = v26_curr
+            if 0.1 <= v27_curr <= 500.0 and "2027" not in eps_dict:
+                eps_dict["2027"] = v27_curr
         except Exception:
             pass
 
-    # 2. 行文格式：預估 26 年 65.33；27 年則 ... 預估 27 年 104.69 元
-    m_single = re.findall(r"(?:預估|估)?\s*(202[5-9]|2[5-9])\s*年[^\d\n]{0,15}(?:EPS|每股盈餘)?[\s:：=]*(?:為)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?", head, re.I)
-    for y_raw, val_raw in m_single:
+    # 4. 行文單一年度格式：預估 2026 年 EPS 為 4.8 元 或 2026年EPS 68.4
+    m_single = re.finditer(
+        r"(?:預估|估)?\s*(202[5-9]|2[5-9])\s*年[^\d\n,，;；]{0,8}(?:EPS|每股盈餘)[\s:：=]*(?:為|至|來到)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
+        head,
+        re.I,
+    )
+    for m in m_single:
         try:
-            val = float(val_raw)
+            val = float(m.group(2))
+            y_raw = m.group(1)
             y_clean = "20" + y_raw if len(y_raw) == 2 else y_raw
             if 0.5 <= val <= 500.0 and y_clean not in eps_dict:
                 eps_dict[y_clean] = val
         except ValueError:
             pass
 
-    # 3. 大摩 Fiscal Year Ending 表格格式
-    m_ms = re.search(r"Fiscal\s*Year\s*Ending[^\n]*\n[^\n]*EPS[^\n]*\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})", head, re.I)
+    # 5. 大摩 Fiscal Year Ending 表格格式
+    m_ms = re.search(
+        r"Fiscal\s*Year\s*Ending[^\n]*\n[^\n]*EPS[^\n]*\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})",
+        head,
+        re.I,
+    )
     if m_ms:
         try:
             v25, v26, v27 = float(m_ms.group(1)), float(m_ms.group(2)), float(m_ms.group(3))
@@ -248,8 +476,12 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
         except Exception:
             pass
 
-    # 4. 高盛 GS Forecast 表格格式：EPS (NT$) New 66.26 109.21 140.91
-    m_gs = re.search(r"EPS\s*\([A-Za-z$]+\)\s*New\s*([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})", head, re.I)
+    # 5. 高盛 GS Forecast 表格格式：EPS (NT$) New 66.26 109.21 140.91
+    m_gs = re.search(
+        r"EPS\s*\([A-Za-z$]+\)\s*New\s*([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})\s+([0-9]{1,3}\.[0-9]{2})",
+        head,
+        re.I,
+    )
     if m_gs:
         try:
             v25, v26, v27 = float(m_gs.group(1)), float(m_gs.group(2)), float(m_gs.group(3))
@@ -260,8 +492,12 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
         except Exception:
             pass
 
-    # 5. 麥格理 Macquarie 表格格式：EPS rep [TWD] | 66.2 | 110.6 | 159.7
-    m_mac = re.search(r"EPS\s*rep[^\n|]*\|\s*([0-9]{1,3}\.[0-9]{1,2})\s*\|\s*([0-9]{1,3}\.[0-9]{1,2})\s*\|\s*([0-9]{1,3}\.[0-9]{1,2})", head, re.I)
+    # 6. 麥格理 Macquarie 表格格式：EPS rep [TWD] | 66.2 | 110.6 | 159.7
+    m_mac = re.search(
+        r"EPS\s*rep[^\n|]*\|\s*([0-9]{1,3}\.[0-9]{1,2})\s*\|\s*([0-9]{1,3}\.[0-9]{1,2})\s*\|\s*([0-9]{1,3}\.[0-9]{1,2})",
+        head,
+        re.I,
+    )
     if m_mac:
         try:
             v25, v26, v27 = float(m_mac.group(1)), float(m_mac.group(2)), float(m_mac.group(3))
@@ -272,8 +508,12 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
         except Exception:
             pass
 
-    # 6. 本土券商簡易損益表：|每股盈餘 EPS(元)| ... |65.33|104.69|
-    m_table = re.search(r"(?:每股盈餘|EPS)[^\n|]*\|\s*([0-9]{1,3}\.[0-9]{2})\s*\|\s*([0-9]{1,3}\.[0-9]{2})\s*\|\s*([0-9]{1,3}\.[0-9]{2})", head, re.I)
+    # 7. 本土券商簡易損益表：|每股盈餘 EPS(元)| ... |65.33|104.69|
+    m_table = re.search(
+        r"(?:每股盈餘|EPS)[^\n|]*\|\s*([0-9]{1,3}\.[0-9]{2})\s*\|\s*([0-9]{1,3}\.[0-9]{2})\s*\|\s*([0-9]{1,3}\.[0-9]{2})",
+        head,
+        re.I,
+    )
     if m_table:
         try:
             vals = [float(m_table.group(1)), float(m_table.group(2)), float(m_table.group(3))]
@@ -284,7 +524,8 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
         except Exception:
             pass
 
-    return eps_dict
+    # 執行單一來源相鄰年度合理性檢查與離群剔除
+    return filter_eps_series_single_source(eps_dict)
 
 
 def parse_report_file(file_path: Path) -> dict[str, Any] | None:
@@ -438,6 +679,10 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "title": title,
         })
 
+    # 跨券商同年度 EPS 離群過濾
+    eps_2026_clean = filter_cross_broker_eps_outliers(eps_2026_list)
+    eps_2027_clean = filter_cross_broker_eps_outliers(eps_2027_list)
+
     # 計算統計量
     median_tp = None
     min_tp = None
@@ -450,14 +695,14 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
         max_tp = max(sorted_tp)
 
     eps_2026_med = None
-    if eps_2026_list:
-        sorted_26 = sorted(eps_2026_list)
+    if eps_2026_clean:
+        sorted_26 = sorted(eps_2026_clean)
         n = len(sorted_26)
         eps_2026_med = round(sorted_26[n // 2] if n % 2 == 1 else (sorted_26[n // 2 - 1] + sorted_26[n // 2]) / 2.0, 2)
 
     eps_2027_med = None
-    if eps_2027_list:
-        sorted_27 = sorted(eps_2027_list)
+    if eps_2027_clean:
+        sorted_27 = sorted(eps_2027_clean)
         n = len(sorted_27)
         eps_2027_med = round(sorted_27[n // 2] if n % 2 == 1 else (sorted_27[n // 2 - 1] + sorted_27[n // 2]) / 2.0, 2)
 
