@@ -138,6 +138,33 @@ def extract_report_date(filename: str, content_head: str) -> str | None:
     return None
 
 
+def extract_title(content_head: str, fallback: str) -> str:
+    """提取 Markdown 報告主標題 (第一行 # 標題或檔名)"""
+    for line in content_head.splitlines():
+        line = line.strip()
+        if line.startswith("# ") and len(line) > 2:
+            return line[2:].strip()
+    return fallback
+
+
+def format_rel_report_path(file_path: str | Path | None, root_dir: Path = ROOT) -> str:
+    """將研報檔案路徑轉為相對專案根的相對路徑"""
+    if not file_path:
+        return ""
+    p = Path(file_path)
+    if not p.is_absolute():
+        return str(p)
+    try:
+        return str(p.resolve().relative_to(root_dir.resolve()))
+    except (ValueError, RuntimeError):
+        p_str = str(p)
+        for marker in ("research/analyst_reports", "analyst_reports"):
+            idx = p_str.find(marker)
+            if idx != -1:
+                return p_str[idx:]
+        return p.name
+
+
 def extract_rating(content_head: str) -> str | None:
     """提取投資評等"""
     for pat, label in RATING_MAP:
@@ -276,10 +303,12 @@ def parse_report_file(file_path: Path) -> dict[str, Any] | None:
     rating = extract_rating(head)
     target_price = extract_target_price(content)
     eps_forecasts = extract_eps_forecasts(content)
+    title = extract_title(head, file_path.stem)
 
     return {
         "file_path": str(file_path),
         "filename": file_path.name,
+        "title": title,
         "broker": broker,
         "report_date": rep_date,
         "rating": rating,
@@ -385,6 +414,9 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
         rtg = r["rating"]
         rd = r["report_date"]
         eps_f = r.get("eps_forecasts", {})
+        fp = r.get("file_path")
+        fn = r.get("filename")
+        title = r.get("title")
 
         if rd:
             dates.append(rd)
@@ -401,6 +433,9 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "rating": rtg,
             "target_price": tp,
             "eps_forecasts": eps_f,
+            "file_path": fp,
+            "filename": fn,
+            "title": title,
         })
 
     # 計算統計量
