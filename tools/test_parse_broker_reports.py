@@ -143,6 +143,9 @@ EPS (NT\\$) 46.57 69.77 120.77
 
         # 2026 EPS: [65.33, 68.4, 69.15, 69.77] -> (68.4 + 69.15)/2 = 68.78
         self.assertIsNotNone(consensus.get("eps_2026_consensus"))
+        # 2027 EPS: [104.69, 113.33, 114.51, 120.77] -> (113.33 + 114.51)/2 = 113.92
+        self.assertIsNotNone(consensus.get("eps_2027_consensus"))
+        self.assertEqual(consensus.get("target_price_base_eps"), 113.92)  # A3 目標價分母對齊次年 2027 EPS
         # 成長率: 2027 vs 2026
         self.assertGreater(consensus.get("eps_growth_pct"), 50.0)
 
@@ -158,7 +161,8 @@ EPS (NT\\$) 46.57 69.77 120.77
             "trailing_pe": 35.0,
             "forward_eps_growth": 65.0,
             "target_price_analyst": 3000.0,
-            "forward_eps_consensus": 68.0,
+            "forward_eps_consensus": 68.78,
+            "target_price_base_eps": 113.92,
             "eps_ttm": 57.0,
             "broker_consensus": {
                 "status": "ok",
@@ -172,6 +176,10 @@ EPS (NT\\$) 46.57 69.77 120.77
         res = compute_taiwan_three_anchors(val_inputs)
         self.assertTrue(res["is_confident"])
         self.assertEqual(res["num_available_anchors"], 3)
+        # A3 PE: 3000 / 113.92 = 26.33 (落在 25~30x 合理區間，而非 43.6x)
+        self.assertAlmostEqual(res["a3_pe"], 26.33, places=1)
+        self.assertGreaterEqual(res["a3_pe"], 25.0)
+        self.assertLessEqual(res["a3_pe"], 30.0)
         self.assertIsNotNone(res["base_fair_pe"])
         self.assertIsNotNone(res["fair_price_base"])
         self.assertGreater(res["fair_price_bull"], res["fair_price_base"])

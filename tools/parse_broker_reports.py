@@ -430,8 +430,11 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
     if eps_2026_med and eps_2027_med and eps_2026_med > 0:
         eps_growth_pct = round(((eps_2027_med - eps_2026_med) / eps_2026_med) * 100.0, 1)
 
-    # 基準 Forward EPS 優先順序：2026 EPS -> 2027 EPS
+    # 基準 Forward EPS（一般用途）：優先 2026 -> 2027
     fwd_eps = eps_2026_med or eps_2027_med
+
+    # A3 估值專用基準 EPS（目標價年度基準對齊）：券商 12 個月目標價多以次年 (2027) 獲利為基礎推導，故優先 2027 -> 2026
+    target_price_base_eps = eps_2027_med or eps_2026_med
 
     latest_date = max(dates) if dates else None
 
@@ -445,6 +448,7 @@ def summarize_broker_consensus(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "min_target_price": min_tp,
         "max_target_price": max_tp,
         "forward_eps_consensus": fwd_eps,
+        "target_price_base_eps": target_price_base_eps,
         "eps_2026_consensus": eps_2026_med,
         "eps_2027_consensus": eps_2027_med,
         "eps_growth_pct": eps_growth_pct,

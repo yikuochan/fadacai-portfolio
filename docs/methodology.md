@@ -6,7 +6,7 @@
 - **三錨點 Fair PE 估值（Section 8.5 / G3.5 / 台股估值）** — 不手寫 PE 倍數猜想；用三個獨立錨點做三角定位：
   - **A1 市場隱含 PE**：現價 ÷ 過去十二個月每股盈餘（TTM EPS），反映市場現在願意給的倍數（美股 EODHD / 台股 TWSE/TPEx OpenAPI）。
   - **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期；台股經 `tools/parse_broker_reports.py` 解析 `research/analyst_reports/` 本地券商研報取得）。
-  - **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法（台股同上，來源為本地研報庫；無覆蓋則降級標示 unavailable）。
+  - **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法（台股來源為本地研報庫，分母優先採用與券商 12 個月目標價基準對齊之次年 2027 EPS 共識，次年缺值時退回當年 2026 EPS；無覆蓋則降級標示 unavailable）。
   - **計算規則**：Base = median；Bull = max × 1.25；Bear = min × 0.70。`pe_ratio == 0.0` / `peg_ratio == 0.0` 或缺值 → 自動丟棄該錨，標 `(anchor unavailable: 具體原因)`。可用錨點 < 2 則強制標示「⚠️ 估值信心不足」且不強行提供目標價。
   - *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*
 - **Thesis Ledger（`tools/thesis_ledger.py`）** — 把帶觸發點的 thesis 登錄進帳本，到期（如財報日）自動回頭抓實際數字驗收 passed/failed，累積命中率。詳見 [`thesis-ledger.md`](thesis-ledger.md)。
