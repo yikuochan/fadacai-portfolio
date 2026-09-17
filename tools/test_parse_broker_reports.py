@@ -547,12 +547,16 @@ Sep. 2026
             },
         }
         # Base fair pe = median(40, 50, 200/7.5=26.67) = 40.0
-        # raw base price = 7.5 * 40.0 = 300.0 (> max_tp 240.0) -> clamp to 240.0
+        # raw base price = 7.5 * 40.0 = 300.0 (> median_tp 200.0) -> clamp to 200.0
+        # raw bull price = 7.5 * (50 * 1.25) = 468.75 (> max_tp 240.0) -> clamp to 240.0
         # raw bear price = 7.5 * (26.67 * 0.70) = 140.0 -> Bear floor = 190 * 0.70 = 133.0 (< 140 -> 不保底)
         res = compute_taiwan_three_anchors(val_inputs)
         self.assertTrue(res["base_capped"])
-        self.assertEqual(res["fair_price_base"], 240.0)
-        self.assertIn("Base 已依券商最高目標價 NT$240 封頂", res["base_cap_reason"])
+        self.assertEqual(res["fair_price_base"], 200.0)
+        self.assertIn("Base 已依券商目標價中位數 NT$200 封頂", res["base_cap_reason"])
+        self.assertTrue(res["bull_capped"])
+        self.assertEqual(res["fair_price_bull"], 240.0)
+        self.assertIn("Bull 已依券商最高目標價 NT$240 封頂", res["bull_cap_reason"])
 
         # 測試 Bear 保底情境：若 raw bear price < 133.0
         val_inputs_bear = dict(val_inputs)
@@ -597,6 +601,61 @@ Sep. 2026
         }
         md = format_taiwan_stock_report(data)
         self.assertIn("⚠️ 估值輸入異常警告", md)
+
+
+    def test_base_clamp_at_median_target_price(self):
+        # 驗證 Base clamp 用中位數（median_target_price），Bull clamp 用最高（max_target_price），Bear 用最低（min_target_price * 0.70）
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 35.0,
+            "forward_eps_growth": 40.0,
+            "target_price_analyst": 150.0,
+            "forward_eps_consensus": 5.0,
+            "target_price_base_eps": 5.0,
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 5,
+                "median_target_price": 150.0,
+                "min_target_price": 120.0,
+                "max_target_price": 180.0,
+            },
+        }
+        # A1=35, A2=40, A3=150/5=30 -> base_fair_pe = median(30, 35, 40) = 35.0
+        # raw base price = 5.0 * 35.0 = 175.0 (> median_tp 150.0, 但 <= max_tp 180.0)
+        # Base 應被 clamp 到中位數 150.0（而非 175.0 或 180.0）
+        # raw bull price = 5.0 * (40 * 1.25 = 50.0) = 250.0 (> max_tp 180.0) -> Bull clamp to 180.0
+        # raw bear price = 5.0 * (30 * 0.70 = 21.0) = 105.0 (> 120 * 0.70 = 84.0) -> 105.0
+        res = compute_taiwan_three_anchors(val_inputs)
+        self.assertTrue(res["base_capped"])
+        self.assertEqual(res["fair_price_base"], 150.0)
+        self.assertIn("Base 已依券商目標價中位數 NT$150 封頂", res["base_cap_reason"])
+        self.assertTrue(res["bull_capped"])
+        self.assertEqual(res["fair_price_bull"], 180.0)
+        self.assertIn("Bull 已依券商最高目標價 NT$180 封頂", res["bull_cap_reason"])
+        self.assertEqual(res["fair_price_bear"], 105.0)
+
+    def test_base_eps_fiscal_year_consistency(self):
+        # 驗證 Base 基期 EPS 年度固定使用 target_price_base_eps（通常為次年 2027），與 A3 估值分母保持一致
+        val_inputs = {
+            "current_price": 100.0,
+            "trailing_pe": 20.0,
+            "forward_eps_growth": 25.0,
+            "target_price_analyst": 200.0,
+            "forward_eps_consensus": 6.0,   # 當年 2026 EPS
+            "target_price_base_eps": 10.0,  # 次年 2027 EPS
+            "eps_ttm": 5.0,
+            "broker_consensus": {
+                "status": "ok",
+                "coverage_count": 3,
+                "median_target_price": 200.0,
+                "min_target_price": 180.0,
+                "max_target_price": 250.0,
+            },
+        }
+        res = compute_taiwan_three_anchors(val_inputs)
+        # estimated_eps 必須精確使用 target_price_base_eps = 10.0，而非 forward_eps_consensus = 6.0
+        self.assertEqual(res["estimated_eps"], 10.0)
+        self.assertEqual(res["a3_pe"], 20.0)  # 200 / 10.0 = 20.0 (基期對齊)
 
 
 if __name__ == "__main__":
