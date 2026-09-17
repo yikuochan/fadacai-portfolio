@@ -197,6 +197,23 @@ Sep. 2026
         self.assertEqual(consensus.get("eps_2026_consensus"), 5.27)
         self.assertEqual(consensus.get("eps_2027_consensus"), 8.29)
 
+    def test_single_target_report_scope_excludes_incidental_code_mentions(self):
+        # Bug 3 次要回歸測試：非多標的關鍵字檔案 (find_reports_for_ticker 的 elif
+        # is_multi_target and not is_macro_excluded 範圍判斷)，即使內文章節標題
+        # 偶然含其他代碼字串，也不應被誤判進入次級抽取，錯誤歸因目標價/券商。
+        (self.reports_dir / "unrelated_single_stock_report.md").write_text(
+            """# 元大投顧 個股報告
+2026年8月24日
+## 產業比較 2481 族群評比
+維持買進，目標價 999 元
+""",
+            encoding="utf-8",
+        )
+        matches = find_reports_for_ticker(
+            "2481", reports_dir=self.reports_dir, days=90, reference_date=date(2026, 9, 10)
+        )
+        self.assertEqual(matches, [])
+
     def test_extract_rating(self):
         self.assertEqual(extract_rating("Stock Rating Overweight"), "Buy")
         self.assertEqual(extract_rating("投資評等：買進"), "Buy")
