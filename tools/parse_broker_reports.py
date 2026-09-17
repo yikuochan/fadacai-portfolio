@@ -68,13 +68,13 @@ BROKER_MAPPING: dict[str, list[str]] = {
     "廣發": ["廣發", "GF"],
 }
 
-# 評級分類標準化
+# 評級分類標準化 (支援中英文字詞，中文不使用 \\b 邊界)
 RATING_MAP: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\b(Overweight|OW|Outperform|增加持股|加碼|強力買進)\b", re.I), "Buy"),
-    (re.compile(r"\b(Trading Buy)\b", re.I), "Trading Buy"),
-    (re.compile(r"\b(Buy|買進)\b", re.I), "Buy"),
-    (re.compile(r"\b(Neutral|中立|Hold|持有|Equal-weight|EW|In-Line|Market-Weight)\b", re.I), "Neutral"),
-    (re.compile(r"\b(Underweight|UW|Sell|賣出|降低持股|減碼)\b", re.I), "Sell"),
+    (re.compile(r"(?:\b(?:Overweight|OW|Outperform)\b|增加持股|加碼|強力買進)", re.I), "Buy"),
+    (re.compile(r"(?:\bTrading Buy\b)", re.I), "Trading Buy"),
+    (re.compile(r"(?:\bBuy\b|買進)", re.I), "Buy"),
+    (re.compile(r"(?:\b(?:Neutral|Hold|Equal-weight|EW|In-Line|Market-Weight)\b|中立|持有)", re.I), "Neutral"),
+    (re.compile(r"(?:\b(?:Underweight|UW|Sell)\b|賣出|降低持股|減碼)", re.I), "Sell"),
 ]
 
 # 非個股研究報告的排除關鍵字 (晨報/日報/產業匯總等)
@@ -99,20 +99,39 @@ def extract_broker(filename: str, content_head: str) -> str:
     return "Other Broker"
 
 
-def extract_report_date(filename: str, content_head: str) -> str | None:
-    """提取報告發布日期 (格式: YYYY-MM-DD)"""
+def extract_report_date(filename_or_path: str, content_head: str) -> str | None:
+    """
+    提取報告發布日期 (格式: YYYY-MM-DD)。
+    注意：僅使用檔名 (Path(filename_or_path).name) 比對日期，避免目錄名數字與檔名代碼數字混淆。
+    """
+    filename = Path(filename_or_path).name
+
     # 1. 檔名中標準 YYYYMMDD (例如 20260824, 2026-08-24, 2026_08_24, 2026.08.24)
     m = re.search(r"(202[4-7])[\-_/.]?(0[1-9]|1[0-2])[\-_/.]?(0[1-9]|[12][0-9]|3[01])", filename)
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
 
-    # 2. 內容前段中文日期：2026 年 8 月 24 日 或 2026/08/24 或 2026.08.24 或 2026-08-24
+    # 2. 檔名支援台灣民國年格式 (例如 1150819 -> 2026-08-19, 1141225 -> 2025-12-25)
+    m_roc = re.search(r"(?<!\d)(11[4-7])(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(?!\d)", filename)
+    if m_roc:
+        y = int(m_roc.group(1)) + 1911
+        return f"{y:04d}-{m_roc.group(2)}-{m_roc.group(3)}"
+
+    # 3. 內容前段中文日期：2026 年 8 月 24 日 或 2026/08/24 或 2026.08.24 或 2026-08-24
     m_zh = re.search(r"(202[4-7])[\s年\-/._]+(0?[1-9]|1[0-2])[\s月\-/._]+([12][0-9]|3[01]|0?[1-9])\s*日?", content_head)
     if m_zh:
         y, month, d = int(m_zh.group(1)), int(m_zh.group(2)), int(m_zh.group(3))
         return f"{y:04d}-{month:02d}-{d:02d}"
 
-    # 3. 英文月份格式：September 6, 2026 或 16 July 2026 或 Sep 4, 2026
+    # 4. 內容前段民國年中文日期：115 年 8 月 19 日 或 115/08/19
+    m_roc_zh = re.search(r"(?<!\d)(11[4-7])[\s年\-/._]+(0?[1-9]|1[0-2])[\s月\-/._]+([12][0-9]|3[01]|0?[1-9])\s*日?", content_head)
+    if m_roc_zh:
+        y = int(m_roc_zh.group(1)) + 1911
+        month = int(m_roc_zh.group(2))
+        d = int(m_roc_zh.group(3))
+        return f"{y:04d}-{month:02d}-{d:02d}"
+
+    # 5. 英文月份格式：September 6, 2026 或 16 July 2026 或 Sep 4, 2026
     month_names = {
         "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
         "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
@@ -130,10 +149,12 @@ def extract_report_date(filename: str, content_head: str) -> str | None:
         if m_str in month_names:
             return f"{int(m_en2.group(3)):04d}-{month_names[m_str]:02d}-{int(m_en2.group(1)):02d}"
 
-    # 4. 年月目錄 fallback (若路徑在 202608 之下)
-    m_dir = re.search(r"/(202[4-7])(0[1-9]|1[0-2])/", filename)
-    if m_dir:
-        return f"{m_dir.group(1)}-{m_dir.group(2)}-01"
+    # 6. 年月目錄 fallback (若檔案所在目錄為 202608 格式，且檔名/內文無日期)
+    p = Path(filename_or_path)
+    for parent in p.parents:
+        m_dir = re.search(r"^(202[4-7])(0[1-9]|1[0-2])$", parent.name)
+        if m_dir:
+            return f"{m_dir.group(1)}-{m_dir.group(2)}-01"
 
     return None
 
@@ -444,9 +465,9 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
         except Exception:
             pass
 
-    # 4. 行文單一年度格式：預估 2026 年 EPS 為 4.8 元 或 2026年EPS 68.4
+    # 4. 行文單一年度格式：預估 2026 年 EPS 為 4.8 元 或 2026年EPS 68.4 或 26年EPS預估為5.27
     m_single = re.finditer(
-        r"(?:預估|估)?\s*(202[5-9]|2[5-9])\s*年[^\d\n,，;；]{0,8}(?:EPS|每股盈餘)[\s:：=]*(?:為|至|來到)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
+        r"(?:預估|估)?\s*(202[5-9]|2[5-9])\s*年[^\d\n,，;；]{0,8}(?:EPS|每股盈餘)[\s:：=]*(?:為|至|來到|預估為|預估至)?\s*([0-9]{1,3}\.[0-9]{1,2})\s*元?",
         head,
         re.I,
     )
@@ -528,6 +549,54 @@ def extract_eps_forecasts(content: str) -> dict[str, float]:
     return filter_eps_series_single_source(eps_dict)
 
 
+# 常見台股代碼與別名/中文名對照 (可透過 research/tw-market-config.json 動態補充)
+DEFAULT_TICKER_ALIASES: dict[str, list[str]] = {
+    "2481": ["強茂", "PANJIT", "PanJIT"],
+    "3665": ["貿聯", "貿聯-KY", "BizLink", "Bizlink"],
+    "2330": ["台積電", "台積", "TSMC"],
+    "2454": ["聯發科", "MediaTek"],
+    "2317": ["鴻海", "Hon Hai", "Foxconn"],
+    "2382": ["廣達", "Quanta"],
+    "3037": ["欣興", "Unimicron"],
+    "3081": ["聯亞", "LandMark"],
+    "3443": ["創意", "Global Unichip", "GUC"],
+    "3661": ["世芯", "世芯-KY", "Alchip"],
+    "5274": ["信驊", "ASPEED", "Aspeed"],
+    "6223": ["旺矽", "MPI"],
+    "6669": ["緯穎", "Wiwynn"],
+    "3533": ["嘉澤", "Lotes"],
+    "3189": ["景碩", "Kinsus"],
+    "2383": ["台光電", "EMC"],
+    "6274": ["台燿", "TUC"],
+    "8210": ["勤誠", "Chenbro"],
+    "1560": ["中砂", "Kinik"],
+    "2308": ["台達電", "Delta"],
+    "2328": ["廣宇"],
+    "3141": ["晶宏"],
+}
+
+
+def get_ticker_aliases(ticker: str) -> list[str]:
+    """取得標的的別名與中文名稱清單"""
+    code = ticker.strip().upper().replace(".TW", "").replace(".TWO", "")
+    aliases = list(DEFAULT_TICKER_ALIASES.get(code, []))
+
+    # 嘗試從 research/tw-market-config.json 讀取配置
+    config_file = ROOT / "research" / "tw-market-config.json"
+    if config_file.exists():
+        try:
+            cfg = json.loads(config_file.read_text(encoding="utf-8"))
+            for item in cfg.get("tickers", []):
+                if item.get("code") == code:
+                    name = item.get("name")
+                    if name and name not in aliases:
+                        aliases.append(name)
+        except Exception:
+            pass
+
+    return aliases
+
+
 def parse_report_file(file_path: Path) -> dict[str, Any] | None:
     """解析單份 Markdown 券商研報"""
     try:
@@ -536,11 +605,10 @@ def parse_report_file(file_path: Path) -> dict[str, Any] | None:
         logger.debug("Failed to read %s: %s", file_path, e)
         return None
 
-    filename = str(file_path)
     head = content[:2000]
 
     broker = extract_broker(file_path.name, head)
-    rep_date = extract_report_date(filename, head)
+    rep_date = extract_report_date(str(file_path), head)
     rating = extract_rating(head)
     target_price = extract_target_price(content)
     eps_forecasts = extract_eps_forecasts(content)
@@ -558,6 +626,215 @@ def parse_report_file(file_path: Path) -> dict[str, Any] | None:
     }
 
 
+def parse_multi_target_report(file_path: Path, code: str, aliases: list[str]) -> list[dict[str, Any]]:
+    """
+    從多標的文件（論壇演講、評等彙整表、綜合報告等）中抽取特定標的的評等/目標價/EPS。
+    僅在對該標的有實質評等、目標價或預估 EPS 時納入。
+    """
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        logger.debug("Failed to read %s: %s", file_path, e)
+        return []
+
+    filename = file_path.name
+    rep_date = extract_report_date(str(file_path), content[:2000])
+    doc_broker = extract_broker(filename, content[:2000])
+
+    search_terms = [code] + aliases
+    found_nodes: list[dict[str, Any]] = []
+
+    # 1. Markdown 章節解析：# 標題含 代碼 或 中文/英文別名
+    section_splits = list(re.finditer(r"(?m)^(#{1,3})\s+(.+)$", content))
+    for i, m in enumerate(section_splits):
+        header_level = len(m.group(1))
+        header_text = m.group(2).strip()
+
+        # 檢查該章節標題是否為目標標的 (例如: "# 強茂 (2481 TT)" 或 "# 2481")
+        has_code = re.search(r"(?<!\d)" + re.escape(code) + r"(?!\d)", header_text) is not None
+        has_alias = any(re.search(r"(?<![A-Za-z0-9])" + re.escape(alias) + r"(?![A-Za-z0-9])", header_text, re.I) for alias in aliases)
+        if not (has_code or has_alias):
+            continue
+
+        start_pos = m.end()
+        end_pos = len(content)
+        for next_m in section_splits[i + 1:]:
+            if len(next_m.group(1)) <= header_level:
+                end_pos = next_m.start()
+                break
+
+        sec_body = content[start_pos:end_pos]
+        # 章節標題若為個股，提取該章節內的券商、評等、目標價、EPS
+        sec_broker = extract_broker(filename, sec_body[:2000])
+        if sec_broker == "Other Broker":
+            sec_broker = doc_broker
+
+        sec_rating = extract_rating(sec_body[:2000])
+        sec_tp = extract_target_price(sec_body)
+        sec_eps = extract_eps_forecasts(sec_body)
+
+        # 僅在有實質目標價、評等或預估 EPS 時納入
+        if sec_tp is not None or sec_eps or sec_rating:
+            found_nodes.append({
+                "file_path": str(file_path),
+                "filename": filename,
+                "title": header_text,
+                "broker": sec_broker,
+                "report_date": rep_date,
+                "rating": sec_rating,
+                "target_price": sec_tp,
+                "eps_forecasts": sec_eps,
+                "source_type": "section",
+            })
+
+    # 2. Markdown 表格行解析 (同業個股報告評等彙整等)
+    # 僅針對評等彙整表或晨報研究報告彙整進行逐行表格抽取
+    is_rating_table_doc = any(kw in filename for kw in ("評等彙整", "同業個股", "研究報告彙整表"))
+    if is_rating_table_doc:
+        for line in content.splitlines():
+            if not line.startswith("|") or "|" not in line[1:]:
+                continue
+
+            # 檢查該行是否包含代碼或別名
+            has_code = re.search(r"(?<!\d)" + re.escape(code) + r"(?!\d)", line) is not None
+            has_alias = any(alias in line for alias in aliases)
+            if not (has_code or has_alias):
+                continue
+
+            cols = [c.strip() for c in line.split("|") if c.strip()]
+            if not cols:
+                continue
+
+            # 格式 2: |股票代號 2481|股票名稱 強茂|券商名稱 統一證券|投資評等 強力買進|目標價 205|2026 EPS(F) 5.27|2027 EPS(F) 8.29|
+            if any("股票代號" in c or "目標價" in c for c in cols):
+                row_broker = extract_broker("", line)
+                if row_broker == "Other Broker":
+                    row_broker = doc_broker
+                row_rating = extract_rating(line)
+                row_tp = None
+                m_tp = re.search(r"目標價[^\d\n|]{0,10}([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]{2,5}(?:\.[0-9]+)?)", line)
+                if m_tp:
+                    try:
+                        row_tp = float(m_tp.group(1).replace(",", ""))
+                    except ValueError:
+                        pass
+                row_eps = {}
+                m_26 = re.search(r"2026\s*(?:EPS)?\(?F?\)?\s*([0-9]{1,3}\.[0-9]{1,2})", line, re.I)
+                if m_26:
+                    row_eps["2026"] = float(m_26.group(1))
+                m_27 = re.search(r"2027\s*(?:EPS)?\(?F?\)?\s*([0-9]{1,3}\.[0-9]{1,2})", line, re.I)
+                if m_27:
+                    row_eps["2027"] = float(m_27.group(1))
+
+                if row_tp is not None or row_eps or row_rating:
+                    found_nodes.append({
+                        "file_path": str(file_path),
+                        "filename": filename,
+                        "title": f"{filename} (彙整: {code})",
+                        "broker": row_broker,
+                        "report_date": rep_date,
+                        "rating": row_rating,
+                        "target_price": row_tp,
+                        "eps_forecasts": row_eps,
+                        "source_type": "table_row",
+                    })
+                continue
+
+            # 格式 3: 多券商壓縮列 (例如 |2382|廣達|野村 凱基|Buy 買進|626 500|...)
+            if len(cols) >= 5 and (" " in cols[2] or " " in cols[3]):
+                b_tokens = cols[2].split()
+                r_tokens = cols[3].split()
+                tp_tokens = cols[4].split() if len(cols) > 4 else []
+                e26_tokens = cols[5].split() if len(cols) > 5 else []
+                e27_tokens = cols[6].split() if len(cols) > 6 else []
+
+                for idx, b_raw in enumerate(b_tokens):
+                    b_clean = extract_broker("", b_raw)
+                    r_clean = extract_rating(r_tokens[idx]) if idx < len(r_tokens) else None
+                    tp_clean = None
+                    if idx < len(tp_tokens):
+                        try:
+                            val = float(tp_tokens[idx].replace(",", ""))
+                            if 15.0 <= val <= 25000.0:
+                                tp_clean = val
+                        except ValueError:
+                            pass
+                    eps_clean = {}
+                    if idx < len(e26_tokens):
+                        try:
+                            val = float(e26_tokens[idx].replace(",", ""))
+                            if 0.1 <= val <= 1000.0:
+                                eps_clean["2026"] = val
+                        except ValueError:
+                            pass
+                    if idx < len(e27_tokens):
+                        try:
+                            val = float(e27_tokens[idx].replace(",", ""))
+                            if 0.1 <= val <= 1000.0:
+                                eps_clean["2027"] = val
+                        except ValueError:
+                            pass
+
+                    if tp_clean is not None or eps_clean or r_clean:
+                        found_nodes.append({
+                            "file_path": str(file_path),
+                            "filename": filename,
+                            "title": f"{filename} (彙整: {code} - {b_clean})",
+                            "broker": b_clean,
+                            "report_date": rep_date,
+                            "rating": r_clean,
+                            "target_price": tp_clean,
+                            "eps_forecasts": eps_clean,
+                            "source_type": "table_row",
+                        })
+                continue
+
+            # 格式 1: 單券商標準列 (例如 |2481|強茂|野村證券|Buy|195|||41.30%|)
+            if len(cols) >= 4:
+                row_broker = extract_broker("", cols[2]) if len(cols) > 2 else doc_broker
+                if row_broker == "Other Broker":
+                    row_broker = doc_broker
+                row_rating = extract_rating(cols[3])
+                row_tp = None
+                if len(cols) > 4:
+                    try:
+                        val = float(cols[4].replace(",", "").replace("$", ""))
+                        if 15.0 <= val <= 25000.0:
+                            row_tp = val
+                    except ValueError:
+                        pass
+                row_eps = {}
+                if len(cols) > 5:
+                    try:
+                        val = float(cols[5].replace(",", ""))
+                        if 0.1 <= val <= 1000.0:
+                            row_eps["2026"] = val
+                    except ValueError:
+                        pass
+                if len(cols) > 6:
+                    try:
+                        val = float(cols[6].replace(",", ""))
+                        if 0.1 <= val <= 1000.0:
+                            row_eps["2027"] = val
+                    except ValueError:
+                        pass
+
+                if row_tp is not None or row_eps or row_rating:
+                    found_nodes.append({
+                        "file_path": str(file_path),
+                        "filename": filename,
+                        "title": f"{filename} (彙整: {code} - {row_broker})",
+                        "broker": row_broker,
+                        "report_date": rep_date,
+                        "rating": row_rating,
+                        "target_price": row_tp,
+                        "eps_forecasts": row_eps,
+                        "source_type": "table_row",
+                    })
+
+    return found_nodes
+
+
 def find_reports_for_ticker(
     ticker: str,
     reports_dir: Path = DEFAULT_REPORTS_DIR,
@@ -565,34 +842,57 @@ def find_reports_for_ticker(
     reference_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """
-    依個股代碼搜尋近 N 天內的研報並解析。
+    依個股代碼與別名搜尋近 N 天內的研報並解析。
+    支援：
+    1. 檔名含 代碼 / 中文名 / 英文別名 之獨立報告
+    2. 多標的文件（綜合論壇、同業評等彙整表等）之次級抽取
     若同券商有多份報告，保留最新的一份。
     """
     if not reports_dir.exists():
         return []
 
     code = ticker.strip().upper().replace(".TW", "").replace(".TWO", "")
+    aliases = get_ticker_aliases(code)
     ref_d = reference_date or date.today()
     cutoff_d = ref_d - timedelta(days=days)
-    code_pattern = re.compile(r"(?<!\d)" + re.escape(code) + r"(?!\d)")
 
-    matched_files: list[Path] = []
+    code_pattern = re.compile(r"(?<!\d)" + re.escape(code) + r"(?!\d)")
+    alias_patterns = [
+        re.compile(r"(?<![A-Za-z0-9])" + re.escape(a) + r"(?![A-Za-z0-9])", re.I)
+        for a in aliases
+    ]
+
+    # 多標的彙整文件關鍵字
+    MULTI_TARGET_KEYWORDS = ["論壇", "評等彙整", "同業個股", "投資論壇"]
+
+    all_parsed_reports: list[dict[str, Any]] = []
+
     for p in reports_dir.rglob("*.md"):
         if p.name in ("INDEX.md", "MOC.md", "convert_progress.log"):
             continue
-        # 排除總經產業匯總與新聞日報
-        if any(ex in p.name for ex in MACRO_EXCLUDE_KEYWORDS):
-            continue
-        # 檢查個股代碼是否在檔名中 (確保是該標的的個股報告，避免誤命中日期/價格/他股代碼中的數字子字串)
-        if code_pattern.search(p.name):
-            matched_files.append(p)
 
-    parsed_reports: list[dict[str, Any]] = []
-    for fp in matched_files:
-        rep = parse_report_file(fp)
-        if not rep:
-            continue
+        # 檢查檔名是否符合排除關鍵字
+        is_macro_excluded = any(ex in p.name for ex in MACRO_EXCLUDE_KEYWORDS)
+        is_multi_target = any(kw in p.name for kw in MULTI_TARGET_KEYWORDS)
 
+        # 檔名命中代碼或別名
+        fn_match_code = code_pattern.search(p.name) is not None
+        fn_match_alias = any(pat.search(p.name) for pat in alias_patterns)
+        fn_matched = fn_match_code or fn_match_alias
+
+        if fn_matched and not is_macro_excluded:
+            # 視為該標的的個股報告或專題報告
+            rep = parse_report_file(p)
+            if rep:
+                all_parsed_reports.append(rep)
+        elif is_multi_target or not is_macro_excluded:
+            # 檢查是否為多標的彙整文件或論壇文件，執行次級抽取
+            nodes = parse_multi_target_report(p, code, aliases)
+            all_parsed_reports.extend(nodes)
+
+    # 過濾過期報告 (超過 days 視窗)
+    valid_reports: list[dict[str, Any]] = []
+    for rep in all_parsed_reports:
         rep_d_str = rep.get("report_date")
         if rep_d_str:
             try:
@@ -601,15 +901,20 @@ def find_reports_for_ticker(
                     continue
             except Exception:
                 pass
+        valid_reports.append(rep)
 
-        parsed_reports.append(rep)
+    # 排序：依報告日期降序 (若日期相同，優先選擇含目標價與預估 EPS 較完整者)
+    def sort_key(r: dict[str, Any]) -> tuple[str, int, int]:
+        d = r.get("report_date") or "1970-01-01"
+        has_tp = 1 if r.get("target_price") is not None else 0
+        eps_cnt = len(r.get("eps_forecasts") or {})
+        return (d, has_tp, eps_cnt)
 
-    # 排序：依報告日期降序
-    parsed_reports.sort(key=lambda r: r.get("report_date") or "1970-01-01", reverse=True)
+    valid_reports.sort(key=sort_key, reverse=True)
 
-    # 依券商去重，只留該券商最新的一份報告
+    # 依券商去重，保留該券商最新且最完整的一份報告
     unique_by_broker: dict[str, dict[str, Any]] = {}
-    for r in parsed_reports:
+    for r in valid_reports:
         b = r["broker"]
         if b not in unique_by_broker:
             unique_by_broker[b] = r
