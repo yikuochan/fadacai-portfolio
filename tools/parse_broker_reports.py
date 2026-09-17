@@ -885,7 +885,7 @@ def find_reports_for_ticker(
             rep = parse_report_file(p)
             if rep:
                 all_parsed_reports.append(rep)
-        elif is_multi_target or not is_macro_excluded:
+        elif is_multi_target and not is_macro_excluded:
             # 檢查是否為多標的彙整文件或論壇文件，執行次級抽取
             nodes = parse_multi_target_report(p, code, aliases)
             all_parsed_reports.extend(nodes)
