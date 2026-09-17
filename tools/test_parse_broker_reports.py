@@ -111,6 +111,108 @@ EPS (NT\\$) 46.57 69.77 120.77
         self.assertEqual(extract_report_date("ms_3665.md", "September 6, 2026"), "2026-09-06")
         self.assertEqual(extract_report_date("fubon.md", "報告日期: 2026/08/18"), "2026-08-18")
         self.assertEqual(extract_report_date("cathay.md", "2026 年 7 月 15 日"), "2026-07-15")
+        # Bug 1 回歸測試：目錄年月與檔名代碼數字不應混淆拼成錯誤日期
+        self.assertEqual(
+            extract_report_date("research/analyst_reports/202608/2481強茂-中信_20260626.md", ""),
+            "2026-06-26",
+        )
+        self.assertEqual(
+            extract_report_date("research/analyst_reports/202608/2481強茂-合庫_20260629.md", ""),
+            "2026-06-29",
+        )
+        # Bug 2 測試：民國年格式解析 (115 -> 2026, 114 -> 2025)
+        self.assertEqual(
+            extract_report_date("華南投顧-2481-強茂-1150819.md", ""),
+            "2026-08-19",
+        )
+        self.assertEqual(
+            extract_report_date("華南投顧-2481-強茂-1150623.md", ""),
+            "2026-06-23",
+        )
+        self.assertEqual(
+            extract_report_date("dummy.md", "華南投顧 115 年 8 月 19 日"),
+            "2026-08-19",
+        )
+
+    def test_multi_target_forum_and_table_extraction(self):
+        # Bug 3 測試：多標的論壇報告與評等彙整表之次級抽取
+        # 建立 Mock 統一秋季投資論壇
+        (self.reports_dir / "統一_20260903_2026_Q3全球展望秋季投資論壇.md").write_text(
+            """# 統一_20260903_2026_Q3全球展望秋季投資論壇
+2026/9/4
+# 南亞 (1303 TT)
+維持買進，目標價 320 元
+# 強茂 (2481 TT)
+## AI及車用需求具延續性
+結論: 投資建議調升至強力買進，目標價205元。約略維持26年EPS預估為5.27元，27年EPS預估為8.29元。
+# 欣興 (3037 TT)
+目標價 1220 元
+""",
+            encoding="utf-8",
+        )
+        # 建立 Mock 同業評等彙整表 (含野村)
+        (self.reports_dir / "20260817同業個股報告評等彙整.md").write_text(
+            """# 20260817同業個股報告評等彙整
+|股票代號|股票名稱|券商名稱|投資評等|目標價|2026 EPS(F)|2027 EPS(F)|潛在漲幅(%)|
+|2481|強茂|野村證券|Buy|195|||41.30%|
+|2330|台積電|瑞銀證券|Buy|3650|108.95|149.13|52.40%|
+""",
+            encoding="utf-8",
+        )
+        # 建立 Mock 凱基法說簡報 (無代碼數字，僅有中文名，且無 TP/EPS -> 應被優雅忽略不進 A2/A3)
+        (self.reports_dir / "KGI_26Q3論壇_強茂.md").write_text(
+            """# KGI_26Q3論壇_強茂
+# PANJIT International Inc
+Sep. 2026
+2025 Revenue: NT$ 13.1Billion (2481.TW)
+""",
+            encoding="utf-8",
+        )
+
+        consensus = get_tw_broker_consensus("2481", reports_dir=self.reports_dir, days=90, reference_date=date(2026, 9, 10))
+        self.assertEqual(consensus.get("status"), "ok")
+        self.assertIn("統一", consensus.get("brokers"))
+        self.assertIn("野村", consensus.get("brokers"))
+        self.assertIn("凱基", consensus.get("brokers"))
+
+        # 統一評等抽取
+        uni = next(b for b in consensus["broker_details"] if b["broker"] == "統一")
+        self.assertEqual(uni["rating"], "Buy")
+        self.assertEqual(uni["target_price"], 205.0)
+        self.assertEqual(uni["eps_forecasts"].get("2026"), 5.27)
+        self.assertEqual(uni["eps_forecasts"].get("2027"), 8.29)
+
+        # 野村評等抽取
+        nomura = next(b for b in consensus["broker_details"] if b["broker"] == "野村")
+        self.assertEqual(nomura["rating"], "Buy")
+        self.assertEqual(nomura["target_price"], 195.0)
+
+        # 凱基法說會抽取 (無目標價與 EPS)
+        kgi = next(b for b in consensus["broker_details"] if b["broker"] == "凱基")
+        self.assertIsNone(kgi["target_price"])
+        self.assertEqual(kgi["eps_forecasts"], {})
+
+        # 目標價中位數: [195.0, 205.0] -> 200.0
+        self.assertEqual(consensus.get("median_target_price"), 200.0)
+        self.assertEqual(consensus.get("eps_2026_consensus"), 5.27)
+        self.assertEqual(consensus.get("eps_2027_consensus"), 8.29)
+
+    def test_single_target_report_scope_excludes_incidental_code_mentions(self):
+        # Bug 3 次要回歸測試：非多標的關鍵字檔案 (find_reports_for_ticker 的 elif
+        # is_multi_target and not is_macro_excluded 範圍判斷)，即使內文章節標題
+        # 偶然含其他代碼字串，也不應被誤判進入次級抽取，錯誤歸因目標價/券商。
+        (self.reports_dir / "unrelated_single_stock_report.md").write_text(
+            """# 元大投顧 個股報告
+2026年8月24日
+## 產業比較 2481 族群評比
+維持買進，目標價 999 元
+""",
+            encoding="utf-8",
+        )
+        matches = find_reports_for_ticker(
+            "2481", reports_dir=self.reports_dir, days=90, reference_date=date(2026, 9, 10)
+        )
+        self.assertEqual(matches, [])
 
     def test_extract_rating(self):
         self.assertEqual(extract_rating("Stock Rating Overweight"), "Buy")
