@@ -548,18 +548,20 @@ def compute_taiwan_three_anchors(
 
         # ── 1. Base / Bull / Bear 階梯對券商目標價區間的約束與異常警告 ──
         if max_tp is not None and max_tp > 0:
-            # 異常檢測：若原始 Base 公允價遠超券商最高目標價（例如超過 1.25 倍），視為輸入異常（如 EPS 基期或乘數失真）發出警告
-            if raw_base_price > max_tp * 1.25:
+            median_tp = broker_consensus.get("median_target_price") or max_tp
+
+            # 異常檢測：若原始 Base 公允價遠超券商目標價中位數（例如超過 1.25 倍），視為輸入異常（如 EPS 基期或乘數失真）發出警告
+            if raw_base_price > median_tp * 1.25:
                 valuation_anomaly_warning = (
-                    f"⚠️ 估值輸入異常警告：原始 Base 公允價 NT${raw_base_price:.2f} 遠高於券商最高目標價 NT${max_tp:.2f}，"
+                    f"⚠️ 估值輸入異常警告：原始 Base 公允價 NT${raw_base_price:.2f} 遠高於券商目標價中位數 NT${median_tp:.2f}（>+25%），"
                     f"可能存在 EPS 基期或估值倍數落差，已強制約束公允價階梯。"
                 )
 
-            # Base 公允價約束：不得超過券商最高目標價
-            if raw_base_price > max_tp:
-                fair_price_base = round(max_tp, 2)
+            # Base 公允價約束：以券商目標價中位數（median_target_price）為上限，若超過則 clamp 封頂
+            if raw_base_price > median_tp:
+                fair_price_base = round(median_tp, 2)
                 base_capped = True
-                base_cap_reason = f"Base 已依券商最高目標價 NT${max_tp:,.0f} 封頂"
+                base_cap_reason = f"Base 已依券商目標價中位數 NT${median_tp:,.0f} 封頂"
                 if est_eps > 0:
                     base_fair_pe = round(fair_price_base / est_eps, 2)
             else:
@@ -971,7 +973,7 @@ def format_taiwan_stock_report(data: dict[str, Any]) -> str:
     lines.append("- **A2 PEG 成長合理倍數**：依「盈餘成長率」推合理倍數（PEG = PE ÷ 成長率，約 1 倍為合理），需要未來 EPS 成長預估（分析師一致預期）。")
     lines.append("- **A3 分析師目標價隱含 PE**：券商目標價 ÷ 預估 EPS，反映法人對合理倍數的看法。")
     lines.append("- **計算規則**：Base = 可用錨點 median；Bull = max × 1.25；Bear = min × 0.70；可用錨點 < 2 則強制標示信心不足並不給目標價。")
-    lines.append("- **公允價階梯約束（台股）**：若有本地券商研報覆蓋，Base 與 Bull 公允價不得超過全市場券商最高目標價（超過則封頂），Bear 公允價不得低於券商最低目標價 70%（低於則保底），若原始 Base 遠超券商目標價區間則發出輸入異常警告；無券商覆蓋時，Bull PE 不超過 A1 市場 PE 1.5 倍，避免估值與現實法人預期脫節。")
+    lines.append("- **公允價階梯約束（台股）**：若有本地券商研報覆蓋，Base 公允價以券商目標價中位數（median_target_price）為上限封頂、Bull 公允價以全市場券商最高目標價（max_target_price）為上限封頂，Bear 公允價不得低於券商最低目標價 70%（低於則保底），若原始 Base 遠超券商目標價中位數（>+25%）則發出輸入異常警告；無券商覆蓋時，Bull PE 不超過 A1 市場 PE 1.5 倍，避免估值與現實法人預期脫節。")
     lines.append("- *註：A4 自建估值錨目前僅適用於美股研究體系，不參與台股估值計算。*")
     lines.append("")
 
