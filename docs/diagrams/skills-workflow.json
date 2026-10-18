@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Fadacai Portfolio — Daily Skill Workflow",
+    "quality_profile": "showcase",
+    "viewBox": [1400, 1000]
+  },
+  "nodes": [
+    {"id": "start", "type": "start", "label": "Captain Requests /briefing"},
+    {"id": "briefing-check", "type": "process", "label": "Step 0: Load config\nplan.md + feedback/"},
+    {"id": "briefing-cache", "type": "decision", "label": "Read all caches?\nmacro, earnings, fundamentals,\nleading-indicators, signals"},
+    {"id": "portfolio-call", "type": "process", "label": "Call portfolio-review\n(Full tier only)"},
+    {"id": "stock-call", "type": "process", "label": "Call stock-analysis\n(Signal extraction)"},
+    {"id": "review-call", "type": "process", "label": "Call trade-review\n(Thesis verification)"},
+    {"id": "ev-check", "type": "process", "label": "Call ev-check\n(EV validation)"},
+    {"id": "briefing-output", "type": "process", "label": "Output briefing\n(Quick/Full/Deep tiers)"},
+    {"id": "end-briefing", "type": "end", "label": "Briefing Complete"},
+    {"id": "user-action", "type": "process", "label": "Captain chooses next action"},
+    {"id": "todo-call", "type": "process", "label": "/todo → Priority checklist"},
+    {"id": "portfolio-review-standalone", "type": "process", "label": "/portfolio-review → Full snapshot"},
+    {"id": "stock-analysis-standalone", "type": "process", "label": "/stock-analysis → Individual research"},
+    {"id": "trade-review-standalone", "type": "process", "label": "/trade-review → 2w attribution"},
+    {"id": "options-strategy-standalone", "type": "process", "label": "/options-strategy → Multi-strategy"},
+    {"id": "event-vol-scan-standalone", "type": "process", "label": "/event-vol-scan → Binary catalyst"},
+    {"id": "mcp-health-standalone", "type": "process", "label": "/mcp-health → Connector check"},
+    {"id": "end-other", "type": "end", "label": "Skill Complete"}
+  ],
+  "edges": [
+    {"from": "start", "to": "briefing-check", "label": ""},
+    {"from": "briefing-check", "to": "briefing-cache", "label": ""},
+    {"from": "briefing-cache", "to": "portfolio-call", "label": "Yes (Full/Deep)"},
+    {"from": "briefing-cache", "to": "stock-call", "label": "Yes (Deep)"},
+    {"from": "portfolio-call", "to": "review-call", "label": ""},
+    {"from": "stock-call", "to": "ev-check", "label": ""},
+    {"from": "review-call", "to": "briefing-output", "label": ""},
+    {"from": "ev-check", "to": "briefing-output", "label": ""},
+    {"from": "briefing-output", "to": "end-briefing", "label": ""},
+    {"from": "end-briefing", "to": "user-action", "label": ""},
+    {"from": "user-action", "to": "todo-call", "label": "/todo"},
+    {"from": "user-action", "to": "portfolio-review-standalone", "label": "/portfolio-review"},
+    {"from": "user-action", "to": "stock-analysis-standalone", "label": "/stock-analysis"},
+    {"from": "user-action", "to": "trade-review-standalone", "label": "/trade-review"},
+    {"from": "user-action", "to": "options-strategy-standalone", "label": "/options-strategy"},
+    {"from": "user-action", "to": "event-vol-scan-standalone", "label": "/event-vol-scan"},
+    {"from": "user-action", "to": "mcp-health-standalone", "label": "/mcp-health"},
+    {"from": "todo-call", "to": "end-other", "label": ""},
+    {"from": "portfolio-review-standalone", "to": "end-other", "label": ""},
+    {"from": "stock-analysis-standalone", "to": "end-other", "label": ""},
+    {"from": "trade-review-standalone", "to": "end-other", "label": ""},
+    {"from": "options-strategy-standalone", "to": "end-other", "label": ""},
+    {"from": "event-vol-scan-standalone", "to": "end-other", "label": ""},
+    {"from": "mcp-health-standalone", "to": "end-other", "label": ""}
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Briefing Flow",
+      "items": [
+        "Main entry point for daily workflow",
+        "Loads all configuration and cache data",
+        "Chains other skills based on tier (quick/full/deep)",
+        "Outputs 3-tier briefing or abbreviated versions"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Cascading Skill Calls",
+      "items": [
+        "Portfolio-review provides full snapshot (positions, technicals, fundamentals, P&L)",
+        "Stock-analysis performs deep individual research with 3-anchor valuation",
+        "Trade-review closes the loop with 2-week attribution and rule scoring",
+        "EV-check validates all probability distributions before output"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Standalone Skill Usage",
+      "items": [
+        "Each skill can be invoked independently by captain",
+        "/todo generates priority action checklist",
+        "/options-strategy calculates multi-strategy decisions",
+        "/event-vol-scan identifies binary catalyst opportunities",
+        "/mcp-health debugs connector issues"
+      ]
+    }
+  ]
+}
