@@ -77,6 +77,7 @@ MCP 安裝與環境變數完整說明見 [`docs/setup.md`](docs/setup.md)。
 
 ## 文件
 
+- [`docs/skills-flowchart.md`](docs/skills-flowchart.md) — 10 個 skill 的流程、邊界、依賴、決策矩陣與安全紅線
 - [`docs/setup.md`](docs/setup.md) — 安裝步驟、7 個 MCP server 設定與註冊指令、環境變數表、關鍵本地檔案、常見問題
 - [`docs/setup-troubleshooting.md`](docs/setup-troubleshooting.md) — 從零安裝實際會卡住的 7 個踩坑速查
 - [`docs/briefing-auto-send.md`](docs/briefing-auto-send.md) — Telegram/Email 自動推送完整設定、pipeline 架構、疑難排解

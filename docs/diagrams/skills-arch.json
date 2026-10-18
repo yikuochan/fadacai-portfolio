@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Fadacai Portfolio Skills Architecture",
+    "quality_profile": "showcase",
+    "viewBox": [1600, 1100]
+  },
+  "components": [
+    {
+      "id": "captain",
+      "type": "external",
+      "label": "Captain",
+      "sublabel": "User Interface",
+      "pos": [80, 450],
+      "size": [120, 60]
+    },
+    {
+      "id": "briefing",
+      "type": "backend",
+      "label": "Briefing",
+      "sublabel": "Daily (Quick/Full/Deep)",
+      "pos": [280, 450],
+      "size": [140, 60],
+      "tag": "主入口"
+    },
+    {
+      "id": "portfolio-review",
+      "type": "backend",
+      "label": "Portfolio Review",
+      "sublabel": "Full Snapshot",
+      "pos": [500, 200],
+      "size": [140, 60]
+    },
+    {
+      "id": "stock-analysis",
+      "type": "backend",
+      "label": "Stock Analysis",
+      "sublabel": "Individual Research",
+      "pos": [500, 320],
+      "size": [140, 60]
+    },
+    {
+      "id": "trade-review",
+      "type": "backend",
+      "label": "Trade Review",
+      "sublabel": "2w Attribution",
+      "pos": [500, 440],
+      "size": [140, 60]
+    },
+    {
+      "id": "ev-check",
+      "type": "backend",
+      "label": "EV Check",
+      "sublabel": "Honesty Checker",
+      "pos": [750, 300],
+      "size": [130, 60]
+    },
+    {
+      "id": "trade-journal",
+      "type": "backend",
+      "label": "Trade Journal",
+      "sublabel": "Auto-Detect",
+      "pos": [750, 100],
+      "size": [130, 60]
+    },
+    {
+      "id": "options-strategy",
+      "type": "backend",
+      "label": "Options Strategy",
+      "sublabel": "Multi-Strategy Calc",
+      "pos": [750, 440],
+      "size": [130, 60]
+    },
+    {
+      "id": "todo",
+      "type": "backend",
+      "label": "Todo",
+      "sublabel": "Priority Action",
+      "pos": [280, 580],
+      "size": [140, 60]
+    },
+    {
+      "id": "event-vol-scan",
+      "type": "backend",
+      "label": "Event Vol Scan",
+      "sublabel": "Binary + Straddle",
+      "pos": [500, 580],
+      "size": [140, 60]
+    },
+    {
+      "id": "mcp-health",
+      "type": "backend",
+      "label": "MCP Health",
+      "sublabel": "Connector Check",
+      "pos": [750, 580],
+      "size": [130, 60]
+    },
+    {
+      "id": "cache-layer",
+      "type": "database",
+      "label": "Cache Layer",
+      "sublabel": "macro, earnings, fundamentals, signals",
+      "pos": [950, 350],
+      "size": [160, 80]
+    },
+    {
+      "id": "config-files",
+      "type": "database",
+      "label": "Config Files",
+      "sublabel": "plan.md, journal, feedback/",
+      "pos": [950, 500],
+      "size": [160, 80]
+    },
+    {
+      "id": "mcp-servers",
+      "type": "cloud",
+      "label": "MCP Servers",
+      "sublabel": "yfinance, SEC, FMP, EODHD, technical, firstrade, polymarket",
+      "pos": [1150, 300],
+      "size": [180, 80]
+    }
+  ],
+  "connections": [
+    {
+      "id": "captain-briefing",
+      "from": "captain",
+      "to": "briefing",
+      "label": "Daily entry",
+      "variant": "emphasis"
+    },
+    {
+      "id": "captain-todo",
+      "from": "captain",
+      "to": "todo",
+      "label": "Actions",
+      "variant": "default"
+    },
+    {
+      "id": "captain-event",
+      "from": "captain",
+      "to": "event-vol-scan",
+      "label": "Binary catalyst",
+      "variant": "default"
+    },
+    {
+      "id": "captain-health",
+      "from": "captain",
+      "to": "mcp-health",
+      "label": "Debug",
+      "variant": "default"
+    },
+    {
+      "id": "briefing-portfolio",
+      "from": "briefing",
+      "to": "portfolio-review",
+      "label": "Full call",
+      "variant": "default"
+    },
+    {
+      "id": "briefing-stock",
+      "from": "briefing",
+      "to": "stock-analysis",
+      "label": "Signal extract",
+      "variant": "default"
+    },
+    {
+      "id": "briefing-review",
+      "from": "briefing",
+      "to": "trade-review",
+      "label": "Thesis verify",
+      "variant": "default"
+    },
+    {
+      "id": "briefing-ev",
+      "from": "briefing",
+      "to": "ev-check",
+      "label": "EV validation",
+      "variant": "default"
+    },
+    {
+      "id": "portfolio-ev",
+      "from": "portfolio-review",
+      "to": "ev-check",
+      "label": "30d EV check",
+      "variant": "default"
+    },
+    {
+      "id": "portfolio-options",
+      "from": "portfolio-review",
+      "to": "options-strategy",
+      "label": "PMCC scan",
+      "variant": "default"
+    },
+    {
+      "id": "portfolio-journal",
+      "from": "portfolio-review",
+      "to": "trade-journal",
+      "label": "Position delta",
+      "variant": "default"
+    },
+    {
+      "id": "stock-ev",
+      "from": "stock-analysis",
+      "to": "ev-check",
+      "label": "Verdict EV",
+      "variant": "default"
+    },
+    {
+      "id": "review-config",
+      "from": "trade-review",
+      "to": "config-files",
+      "label": "Update RULES",
+      "variant": "emphasis"
+    },
+    {
+      "id": "briefing-cache",
+      "from": "briefing",
+      "to": "cache-layer",
+      "label": "Read all",
+      "variant": "default"
+    },
+    {
+      "id": "portfolio-cache",
+      "from": "portfolio-review",
+      "to": "cache-layer",
+      "label": "Read/write",
+      "variant": "default"
+    },
+    {
+      "id": "stock-cache",
+      "from": "stock-analysis",
+      "to": "cache-layer",
+      "label": "fundamentals",
+      "variant": "default"
+    },
+    {
+      "id": "review-cache",
+      "from": "trade-review",
+      "to": "cache-layer",
+      "label": "ledgers",
+      "variant": "default"
+    },
+    {
+      "id": "options-cache",
+      "from": "options-strategy",
+      "to": "cache-layer",
+      "label": "pmcc_scan",
+      "variant": "default"
+    },
+    {
+      "id": "cache-mcp",
+      "from": "cache-layer",
+      "to": "mcp-servers",
+      "label": "Feed from MCPs",
+      "variant": "default"
+    },
+    {
+      "id": "briefing-config",
+      "from": "config-files",
+      "to": "briefing",
+      "label": "plan.md, feedback/",
+      "variant": "default",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "portfolio-config",
+      "from": "config-files",
+      "to": "portfolio-review",
+      "label": "plan.md, journal",
+      "variant": "default",
+      "fromSide": "left",
+      "toSide": "bottom"
+    },
+    {
+      "id": "journal-config",
+      "from": "trade-journal",
+      "to": "config-files",
+      "label": "journal/*.md",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Daily Workflow",
+      "items": [
+        "Briefing is the main entry point (quick 1min, full 3min, deep 5min)",
+        "Feeds into portfolio-review for snapshot, stock-analysis for research",
+        "Each skill validates with EV-check before outputting verdict"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Data Layers",
+      "items": [
+        "Cache layer stores computed data (macro, earnings, fundamentals, signals)",
+        "Config files hold plan.md and trading journal as ground truth",
+        "MCP servers feed real-time market data (yfinance, SEC, FMP, EODHD, etc)",
+        "Trade-review closes the loop by analyzing outcomes"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Decision Flow",
+      "items": [
+        "Todo generates priority action checklist",
+        "Event-vol-scan identifies binary catalyst opportunities",
+        "Trade-journal auto-detects position changes",
+        "Trade-review computes alpha and updates rule ledger"
+      ]
+    }
+  ]
+}
